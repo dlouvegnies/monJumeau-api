@@ -41,6 +41,18 @@ def init_db():
             responded_at TEXT
         )
     ''')
+
+    db.execute('''
+    CREATE TABLE IF NOT EXISTS push_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        my_code TEXT UNIQUE NOT NULL,
+        push_token TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+    )
+    ''')
+
+
+
     db.commit()
     db.close()
 
@@ -67,6 +79,10 @@ class RegisterAliasRequest(BaseModel):
     their_code: str
     alias: str
 
+class RegisterPushRequest(BaseModel):
+    my_code: str
+    push_token: str
+
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
 async def recommend(req: MessageRequest):
@@ -91,8 +107,8 @@ async def recommend(req: MessageRequest):
     return response.json()
 
 # ── ENDPOINTS GIFTS ──
-@app.post("/gift/send")
-async def send_gift(req: SendGiftRequest):
+@app.post("/gift/send_old")
+async def send_gift_old(req: SendGiftRequest):
     db = get_db()
 
     # Vérifier que le code destinataire existe
@@ -113,6 +129,40 @@ async def send_gift(req: SendGiftRequest):
     db.close()
 
     return { "success": True, "gift_id": gift_id }
+
+@app.post("/gift/send")
+async def send_gift(req: SendGiftRequest):
+    db = get_db()
+
+    gift_id = str(uuid.uuid4())[:8].upper()
+    expires_at = (datetime.now() + timedelta(days=30)).isoformat()
+
+    db.execute('''
+        INSERT INTO gifts (id, from_code, to_code, trait, message, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (gift_id, req.from_code, req.to_code, req.trait, req.message, expires_at))
+    db.commit()
+
+    # Récupérer le token push du destinataire
+    token_row = db.execute(
+        'SELECT push_token FROM push_tokens WHERE my_code = ?',
+        (req.to_code,)
+    ).fetchone()
+    db.close()
+
+    # Envoyer la notification push si token disponible
+    if token_row:
+        await send_push_notification(
+            push_token=token_row['push_token'],
+            title='🎁 Nouveau trait reçu !',
+            body=f'Quelqu\'un pense que tu as une qualité particulière...',
+            data={'screen': 'ReceivedGifts', 'gift_id': gift_id}
+        )
+
+    return {"success": True, "gift_id": gift_id}
+
+
+
 
 @app.get("/gift/received/{my_code}")
 async def get_received(my_code: str):
@@ -185,3 +235,52 @@ async def check_code(code: str):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/push/register")
+async def register_push(req: RegisterPushRequest):
+    db = get_db()
+    db.execute('''
+        INSERT INTO push_tokens (my_code, push_token)
+        VALUES (?, ?)
+        ON CONFLICT(my_code) DO UPDATE SET 
+        push_token = excluded.push_token,
+        updated_at = datetime('now')
+    ''', (req.my_code, req.push_token))
+    db.commit()
+    db.close()
+    return {"success": True}
+
+@app.get("/push/token/{my_code}")
+async def get_push_token(my_code: str):
+    db = get_db()
+    row = db.execute(
+        'SELECT push_token FROM push_tokens WHERE my_code = ?',
+        (my_code,)
+    ).fetchone()
+    db.close()
+    return {"push_token": row['push_token'] if row else None}
+
+async def send_push_notification(push_token: str, title: str, body: str, data: dict = {}):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                'https://exp.host/--/api/v2/push/send',
+                headers={
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                json={
+                    'to': push_token,
+                    'title': title,
+                    'body': body,
+                    'data': data,
+                    'sound': 'default',
+                    'badge': 1,
+                }
+            )
+            print(f'Push envoyé: {response.status_code}')
+            return response.json()
+    except Exception as e:
+        print(f'ERREUR push: {e}')
+        return None
