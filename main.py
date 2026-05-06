@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -19,6 +19,13 @@ app.add_middleware(
 )
 
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+APP_SECRET = os.environ.get("APP_SECRET")
+
+
+def verify_secret(x_app_secret: str = None):
+    if APP_SECRET and x_app_secret != APP_SECRET:
+        raise HTTPException(status_code=401, detail="Non autorisé")
+
 
 # ── BASE DE DONNÉES SERVEUR ──
 def get_db():
@@ -119,7 +126,9 @@ class CompareRespondModel(BaseModel):
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
-async def recommend(req: MessageRequest):
+async def recommend(req: MessageRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
     if not CLAUDE_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API manquante")
     async with httpx.AsyncClient() as client:
@@ -165,7 +174,8 @@ async def send_gift_old(req: SendGiftRequest):
     return { "success": True, "gift_id": gift_id }
 
 @app.post("/gift/send")
-async def send_gift(req: SendGiftRequest):
+async def send_gift(req: SendGiftRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
 
     gift_id = str(uuid.uuid4())[:8].upper()
@@ -199,7 +209,8 @@ async def send_gift(req: SendGiftRequest):
 
 
 @app.get("/gift/received/{my_code}")
-async def get_received(my_code: str):
+async def get_received(my_code: str, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     gifts = db.execute('''
         SELECT * FROM gifts 
@@ -212,7 +223,8 @@ async def get_received(my_code: str):
     return { "gifts": [dict(g) for g in gifts] }
 
 @app.get("/gift/sent/{my_code}")
-async def get_sent(my_code: str):
+async def get_sent(my_code: str, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     gifts = db.execute('''
         SELECT * FROM gifts 
@@ -224,7 +236,9 @@ async def get_sent(my_code: str):
     return { "gifts": [dict(g) for g in gifts] }
 
 @app.post("/gift/respond")
-async def respond_gift(req: RespondGiftRequest):
+async def respond_gift(req: RespondGiftRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
     db = get_db()
     status = 'accepted' if req.accepted else 'rejected'
     db.execute('''
@@ -272,7 +286,8 @@ async def health():
 
 
 @app.post("/push/register")
-async def register_push(req: RegisterPushRequest):
+async def register_push(req: RegisterPushRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     db.execute('''
         INSERT INTO push_tokens (my_code, push_token)
@@ -296,7 +311,8 @@ async def get_push_token(my_code: str):
     return {"push_token": row['push_token'] if row else None}
 
 @app.post("/compare/request")
-async def request_comparison(req: CompareRequestModel):
+async def request_comparison(req: CompareRequestModel, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     
     # Vérifier qu'il n'y a pas déjà une demande en cours
@@ -338,7 +354,8 @@ async def request_comparison(req: CompareRequestModel):
     return {"success": True, "comparison_id": comparison_id}
 
 @app.post("/compare/respond")
-async def respond_comparison(req: CompareRespondModel):
+async def respond_comparison(req: CompareRespondModel, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     
     comparison = db.execute(
@@ -406,7 +423,8 @@ async def respond_comparison(req: CompareRespondModel):
     return {"success": True, "status": "waiting"}
 
 @app.get("/compare/status/{comparison_id}")
-async def get_comparison_status(comparison_id: str):
+async def get_comparison_status(comparison_id: str, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     comparison = db.execute(
         'SELECT * FROM comparisons WHERE id = ?',
@@ -424,7 +442,8 @@ async def get_comparison_status(comparison_id: str):
     }
 
 @app.get("/compare/pending/{my_code}")
-async def get_pending_comparisons(my_code: str):
+async def get_pending_comparisons(my_code: str, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
     db = get_db()
     comparisons = db.execute('''
         SELECT * FROM comparisons 
