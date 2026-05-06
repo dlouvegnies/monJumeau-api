@@ -328,7 +328,11 @@ async def request_comparison(req: CompareRequestModel, x_app_secret: str = Heade
         return {"success": False, "error": "Une demande est déjà en cours"}
     
     comparison_id = str(uuid.uuid4())[:8].upper()
-    expires_at = (datetime.now() + timedelta(minutes=10)).isoformat()
+    # 10 minutes
+    # expires_at = (datetime.now() + timedelta(minutes=10)).isoformat()
+
+    # APRÈS — 24 heures
+    expires_at = (datetime.now() + timedelta(hours=24)).isoformat()
     
     db.execute('''
         INSERT INTO comparisons (id, from_code, to_code, expires_at)
