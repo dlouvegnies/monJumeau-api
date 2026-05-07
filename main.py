@@ -21,6 +21,8 @@ app.add_middleware(
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 APP_SECRET = os.environ.get("APP_SECRET")
 
+ADZUNA_APP_ID = os.environ.get("ADZUNA_APP_ID")
+ADZUNA_APP_KEY = os.environ.get("ADZUNA_APP_KEY")
 
 def verify_secret(x_app_secret: str = None):
     if APP_SECRET and x_app_secret != APP_SECRET:
@@ -122,7 +124,14 @@ class CompareRespondModel(BaseModel):
     my_code: str
     my_vector: Optional[dict] = None
 
-
+class JobSearchRequest(BaseModel):
+    keywords: str = ''
+    location: str = ''
+    contract_type: str = ''
+    results_per_page: int = 20
+    page: int = 1
+    permanent: str = ''
+    contract: str = ''
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -576,3 +585,47 @@ async def send_push_notification(push_token: str, title: str, body: str, data: d
     except Exception as e:
         print(f'ERREUR push: {e}')
         return None
+    
+
+@app.post("/jobs/adzuna")
+async def search_adzuna(req: JobSearchRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    
+    try:
+        url = f"https://api.adzuna.com/v1/api/jobs/fr/search/{req.page}"
+        params = {
+            "app_id": ADZUNA_APP_ID,
+            "app_key": ADZUNA_APP_KEY,
+            "results_per_page": req.results_per_page,
+            "content-type": "application/json",
+        }
+        if req.keywords: params["what"] = req.keywords
+        if req.location: params["where"] = req.location
+        if req.permanent == '1': params["permanent"] = '1'
+        if req.contract == '1': params["contract"] = '1'
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=15.0)
+            data = response.json()
+
+        if "results" not in data:
+            return {"results": []}
+
+        jobs = [{
+            "id": job.get("id"),
+            "title": job.get("title"),
+            "company": job.get("company", {}).get("display_name", "Entreprise non précisée"),
+            "location": job.get("location", {}).get("display_name", "Lieu non précisé"),
+            "salary_min": job.get("salary_min"),
+            "salary_max": job.get("salary_max"),
+            "description": job.get("description"),
+            "contract_type": job.get("contract_type"),
+            "created": job.get("created"),
+            "redirect_url": job.get("redirect_url"),
+            "category": job.get("category", {}).get("label"),
+        } for job in data["results"]]
+
+        return {"results": jobs}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
