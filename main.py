@@ -24,6 +24,16 @@ APP_SECRET = os.environ.get("APP_SECRET")
 ADZUNA_APP_ID = os.environ.get("ADZUNA_APP_ID")
 ADZUNA_APP_KEY = os.environ.get("ADZUNA_APP_KEY")
 
+FRANCE_TRAVAIL_CLIENT_ID = os.environ.get("FRANCE_TRAVAIL_CLIENT_ID")
+FRANCE_TRAVAIL_CLIENT_SECRET = os.environ.get("FRANCE_TRAVAIL_CLIENT_SECRET")
+
+FT_AUTH_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire"
+FT_API_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+
+ft_token = None
+ft_token_expiry = 0
+
+
 def verify_secret(x_app_secret: str = None):
     if APP_SECRET and x_app_secret != APP_SECRET:
         raise HTTPException(status_code=401, detail="Non autorisé")
@@ -132,6 +142,13 @@ class JobSearchRequest(BaseModel):
     page: int = 1
     permanent: str = ''
     contract: str = ''
+
+class FranceTravailRequest(BaseModel):
+    keywords: str = ''
+    location: str = ''
+    contract_type: str = ''
+    results_per_page: int = 20
+
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -624,6 +641,116 @@ async def search_adzuna(req: JobSearchRequest, x_app_secret: str = Header(None))
             "redirect_url": job.get("redirect_url"),
             "category": job.get("category", {}).get("label"),
         } for job in data["results"]]
+
+        return {"results": jobs}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+async def get_france_travail_token():
+    global ft_token, ft_token_expiry
+    import time
+    
+    if ft_token and time.time() < ft_token_expiry:
+        return ft_token
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            FT_AUTH_URL,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "client_credentials",
+                "client_id": FRANCE_TRAVAIL_CLIENT_ID,
+                "client_secret": FRANCE_TRAVAIL_CLIENT_SECRET,
+                "scope": "api_offresdemploiv2",
+            },
+            timeout=10.0,
+        )
+        data = response.json()
+        ft_token = data.get("access_token")
+        ft_token_expiry = time.time() + data.get("expires_in", 1400) - 60
+        return ft_token
+
+CITY_DEPT_MAP = {
+    'paris': '75', 'marseille': '13', 'lyon': '69',
+    'toulouse': '31', 'nice': '06', 'nantes': '44',
+    'strasbourg': '67', 'montpellier': '34', 'bordeaux': '33',
+    'lille': '59', 'rennes': '35', 'reims': '51',
+    'saint-etienne': '42', 'toulon': '83', 'grenoble': '38',
+    'dijon': '21', 'angers': '49', 'nimes': '30',
+    'clermont-ferrand': '63', 'aix-en-provence': '13',
+    'brest': '29', 'amiens': '80', 'limoges': '87',
+    'tours': '37', 'metz': '57', 'arras': '62',
+    'lens': '62', 'douai': '59', 'valenciennes': '59',
+    'dunkerque': '59', 'calais': '62', 'le havre': '76',
+    'rouen': '76', 'caen': '14', 'nancy': '54',
+    'mulhouse': '68', 'perpignan': '66', 'besancon': '25',
+    'orleans': '45', 'poitiers': '86', 'pau': '64',
+}
+
+def get_dept_code(city: str) -> str:
+    if not city:
+        return None
+    city_lower = city.lower().strip()
+    for key, code in CITY_DEPT_MAP.items():
+        if city_lower in key or key in city_lower:
+            return code
+    if city.strip().isdigit() and len(city.strip()) <= 3:
+        return city.strip()
+    return None
+
+
+@app.post("/jobs/france-travail")
+async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    
+    try:
+        token = await get_france_travail_token()
+        if not token:
+            raise HTTPException(status_code=500, detail="Token France Travail non disponible")
+
+        params = f"range=0-{req.results_per_page - 1}"
+        if req.keywords:
+            params += f"&motsCles={req.keywords}"
+        if req.location:
+            dept = get_dept_code(req.location)
+            if dept:
+                params += f"&departement={dept}"
+        if req.contract_type:
+            params += f"&typeContrat={req.contract_type}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{FT_API_URL}?{params}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+                timeout=15.0,
+            )
+
+        if response.status_code == 204:
+            return {"results": []}
+
+        data = response.json()
+        if "resultats" not in data:
+            return {"results": []}
+
+        jobs = [{
+            "id": job.get("id"),
+            "title": job.get("intitule"),
+            "company": job.get("entreprise", {}).get("nom", "Entreprise non précisée"),
+            "location": job.get("lieuTravail", {}).get("libelle", "Lieu non précisé"),
+            "salary_min": job.get("salaire", {}).get("commentaire"),
+            "salary_max": None,
+            "description": job.get("description"),
+            "contract_type": job.get("typeContratLibelle"),
+            "created": job.get("dateCreation"),
+            "redirect_url": f"https://candidat.francetravail.fr/offres/recherche/detail/{job.get('id')}",
+            "category": job.get("appellationlibelle"),
+            "source": "france_travail",
+        } for job in data["resultats"]]
 
         return {"results": jobs}
 
