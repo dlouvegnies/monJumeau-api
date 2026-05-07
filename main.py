@@ -707,6 +707,8 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
     
     try:
         token = await get_france_travail_token()
+        print(f"Token FT: {token[:20] if token else 'None'}...")
+        
         if not token:
             raise HTTPException(status_code=500, detail="Token France Travail non disponible")
 
@@ -715,10 +717,13 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
             params += f"&motsCles={req.keywords}"
         if req.location:
             dept = get_dept_code(req.location)
+            print(f"Ville: {req.location} → Dept: {dept}")
             if dept:
                 params += f"&departement={dept}"
         if req.contract_type:
             params += f"&typeContrat={req.contract_type}"
+
+        print(f"URL FT: {FT_API_URL}?{params}")
 
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -729,6 +734,9 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
                 },
                 timeout=15.0,
             )
+
+        print(f"Status FT: {response.status_code}")
+        print(f"Réponse FT: {response.text[:300]}")
 
         if response.status_code == 204:
             return {"results": []}
@@ -755,4 +763,7 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
         return {"results": jobs}
 
     except Exception as e:
+        print(f"ERREUR France Travail: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
