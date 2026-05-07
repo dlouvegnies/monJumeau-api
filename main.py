@@ -736,7 +736,6 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
             )
 
         print(f"Status FT: {response.status_code}")
-        print(f"Réponse FT: {response.text[:300]}")
 
         if response.status_code == 204:
             return {"results": []}
