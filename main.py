@@ -34,6 +34,13 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_URL = "https://image.tmdb.org/t/p/w500"
 
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_AUTH_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_API_URL = "https://api.spotify.com/v1"
+
+spotify_token = None
+spotify_token_expiry = 0
 
 ft_token = None
 ft_token_expiry = 0
@@ -158,6 +165,9 @@ class TMDBRequest(BaseModel):
     title: str
     media_type: str = "movie"  # "movie" ou "tv"
 
+class SpotifyRequest(BaseModel):
+    artist: str
+    album: str = ''
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -866,4 +876,130 @@ async def get_media_details(req: TMDBRequest, x_app_secret: str = Header(None)):
 
     except Exception as e:
         print(f"ERREUR TMDB: {str(e)}")
+        return {"result": None}
+    
+
+async def get_spotify_token():
+    global spotify_token, spotify_token_expiry
+    import time, base64
+
+    if spotify_token and time.time() < spotify_token_expiry:
+        return spotify_token
+
+    credentials = base64.b64encode(
+        f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
+    ).decode()
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            SPOTIFY_AUTH_URL,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={"grant_type": "client_credentials"},
+            timeout=10.0,
+        )
+        data = response.json()
+        spotify_token = data.get("access_token")
+        spotify_token_expiry = time.time() + data.get("expires_in", 3500) - 60
+        return spotify_token
+    
+
+@app.post("/music/details")
+async def get_music_details(req: SpotifyRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        token = await get_spotify_token()
+        if not token:
+            return {"result": None}
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async with httpx.AsyncClient() as client:
+
+            # Recherche artiste
+            query = req.artist
+            if req.album:
+                query += f" {req.album}"
+
+            search_response = await client.get(
+                f"{SPOTIFY_API_URL}/search",
+                headers=headers,
+                params={
+                    "q": query,
+                    "type": "artist,album",
+                    "market": "FR",
+                    "limit": 1,
+                },
+                timeout=10.0,
+            )
+            search_data = search_response.json()
+
+        artist = None
+        album = None
+
+        # Récupérer l'artiste
+        artists = search_data.get("artists", {}).get("items", [])
+        if artists:
+            artist = artists[0]
+
+        # Récupérer l'album
+        albums = search_data.get("albums", {}).get("items", [])
+        if albums:
+            album = albums[0]
+
+        if not artist and not album:
+            return {"result": None}
+
+        # Image artiste ou album
+        image_url = None
+        if album and album.get("images"):
+            image_url = album["images"][0]["url"]
+        elif artist and artist.get("images"):
+            image_url = artist["images"][0]["url"]
+
+        # Genres
+        genres = artist.get("genres", [])[:4] if artist else []
+
+        # Popularité
+        popularity = artist.get("popularity") if artist else None
+
+        # Top tracks de l'artiste
+        top_tracks = []
+        if artist:
+            async with httpx.AsyncClient() as client:
+                tracks_response = await client.get(
+                    f"{SPOTIFY_API_URL}/artists/{artist['id']}/top-tracks",
+                    headers=headers,
+                    params={"market": "FR"},
+                    timeout=10.0,
+                )
+                tracks_data = tracks_response.json()
+                for track in tracks_data.get("tracks", [])[:5]:
+                    top_tracks.append({
+                        "name": track["name"],
+                        "preview_url": track.get("preview_url"),
+                        "duration_ms": track.get("duration_ms"),
+                        "spotify_url": track["external_urls"].get("spotify"),
+                    })
+
+        result = {
+            "image_url": image_url,
+            "genres": genres,
+            "popularity": popularity,
+            "followers": artist.get("followers", {}).get("total") if artist else None,
+            "top_tracks": top_tracks,
+            "spotify_artist_url": artist["external_urls"].get("spotify") if artist else None,
+            "spotify_album_url": album["external_urls"].get("spotify") if album else None,
+            "album_name": album.get("name") if album else None,
+            "album_release_date": album.get("release_date") if album else None,
+            "amazon_url": f"https://www.amazon.fr/s?k={req.artist}+musique",
+        }
+
+        return {"result": result}
+
+    except Exception as e:
+        print(f"ERREUR Spotify: {str(e)}")
         return {"result": None}
