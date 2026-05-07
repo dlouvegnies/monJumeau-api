@@ -39,6 +39,10 @@ SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_AUTH_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
 
+GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY")
+GOOGLE_PLACES_URL = "https://maps.googleapis.com/maps/api/place"
+
+
 spotify_token = None
 spotify_token_expiry = 0
 
@@ -168,6 +172,10 @@ class TMDBRequest(BaseModel):
 class SpotifyRequest(BaseModel):
     artist: str
     album: str = ''
+
+class RestaurantRequest(BaseModel):
+    name: str
+    location: str = ''
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -1002,4 +1010,103 @@ async def get_music_details(req: SpotifyRequest, x_app_secret: str = Header(None
 
     except Exception as e:
         print(f"ERREUR Spotify: {str(e)}")
+        return {"result": None}
+    
+
+@app.post("/restaurant/details")
+async def get_restaurant_details(req: RestaurantRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        async with httpx.AsyncClient() as client:
+
+            # Étape 1 — Recherche du restaurant
+            query = req.name
+            if req.location:
+                query += f" {req.location}"
+
+            search_response = await client.get(
+                f"{GOOGLE_PLACES_URL}/textsearch/json",
+                params={
+                    "query": query + " restaurant",
+                    "key": GOOGLE_PLACES_API_KEY,
+                    "language": "fr",
+                    "region": "fr",
+                },
+                timeout=10.0,
+            )
+            search_data = search_response.json()
+
+            if not search_data.get("results"):
+                return {"result": None}
+
+            place = search_data["results"][0]
+            place_id = place.get("place_id")
+
+            # Étape 2 — Détails complets
+            detail_response = await client.get(
+                f"{GOOGLE_PLACES_URL}/details/json",
+                params={
+                    "place_id": place_id,
+                    "key": GOOGLE_PLACES_API_KEY,
+                    "language": "fr",
+                    "fields": "name,rating,user_ratings_total,formatted_address,opening_hours,price_level,photos,website,url,formatted_phone_number,types",
+                },
+                timeout=10.0,
+            )
+            detail_data = detail_response.json()
+            detail = detail_data.get("result", {})
+
+            # Photo principale
+            photo_url = None
+            photos = detail.get("photos") or place.get("photos", [])
+            if photos:
+                photo_ref = photos[0].get("photo_reference")
+                if photo_ref:
+                    photo_url = (
+                        f"{GOOGLE_PLACES_URL}/photo"
+                        f"?maxwidth=600"
+                        f"&photo_reference={photo_ref}"
+                        f"&key={GOOGLE_PLACES_API_KEY}"
+                    )
+
+            # Prix
+            price_level = detail.get("price_level") or place.get("price_level")
+            price_str = None
+            if price_level is not None:
+                price_str = '💰' * (price_level + 1) if price_level > 0 else 'Gratuit'
+
+            # Horaires
+            opening_hours = detail.get("opening_hours", {})
+            is_open = opening_hours.get("open_now")
+            weekday_text = opening_hours.get("weekday_text", [])
+
+            # Types de cuisine
+            types = detail.get("types", place.get("types", []))
+            cuisine_types = [
+                t.replace('_', ' ').title()
+                for t in types
+                if t not in ['restaurant', 'food', 'point_of_interest',
+                             'establishment', 'store']
+            ][:3]
+
+            result = {
+                "photo_url": photo_url,
+                "name": detail.get("name") or place.get("name"),
+                "rating": detail.get("rating") or place.get("rating"),
+                "user_ratings_total": detail.get("user_ratings_total") or place.get("user_ratings_total"),
+                "address": detail.get("formatted_address") or place.get("formatted_address"),
+                "price_level": price_str,
+                "is_open": is_open,
+                "weekday_text": weekday_text[:3],
+                "phone": detail.get("formatted_phone_number"),
+                "website": detail.get("website"),
+                "google_maps_url": detail.get("url") or f"https://www.google.com/maps/place/?q=place_id:{place_id}",
+                "cuisine_types": cuisine_types,
+            }
+
+            return {"result": result}
+
+    except Exception as e:
+        print(f"ERREUR Google Places: {str(e)}")
         return {"result": None}
