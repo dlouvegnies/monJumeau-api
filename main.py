@@ -744,7 +744,7 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
             print("Erreur 403 — scope insuffisant ou token invalide")
             return {"results": []}
 
-        if response.status_code != 200:
+        if response.status_code not in [200, 206]:
             print(f"Erreur HTTP {response.status_code}")
             return {"results": []}
 
