@@ -30,6 +30,11 @@ FRANCE_TRAVAIL_CLIENT_SECRET = os.environ.get("FRANCE_TRAVAIL_CLIENT_SECRET")
 FT_AUTH_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire"
 FT_API_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
 
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_IMAGE_URL = "https://image.tmdb.org/t/p/w500"
+
+
 ft_token = None
 ft_token_expiry = 0
 
@@ -148,6 +153,10 @@ class FranceTravailRequest(BaseModel):
     location: str = ''
     contract_type: str = ''
     results_per_page: int = 20
+
+class TMDBRequest(BaseModel):
+    title: str
+    media_type: str = "movie"  # "movie" ou "tv"
 
 
 # ── ENDPOINTS CLAUDE ──
@@ -774,3 +783,87 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/media/details")
+async def get_media_details(req: TMDBRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        # Recherche du film/série
+        search_url = f"{TMDB_BASE_URL}/search/{req.media_type}"
+        params = {
+            "api_key": TMDB_API_KEY,
+            "query": req.title,
+            "language": "fr-FR",
+        }
+
+        async with httpx.AsyncClient() as client:
+            search_response = await client.get(search_url, params=params, timeout=10.0)
+            search_data = search_response.json()
+
+        if not search_data.get("results"):
+            return {"result": None}
+
+        item = search_data["results"][0]
+        item_id = item["id"]
+
+        # Détails complets
+        detail_url = f"{TMDB_BASE_URL}/{req.media_type}/{item_id}"
+        detail_params = {
+            "api_key": TMDB_API_KEY,
+            "language": "fr-FR",
+            "append_to_response": "videos,credits,watch/providers",
+        }
+
+        async with httpx.AsyncClient() as client:
+            detail_response = await client.get(detail_url, params=detail_params, timeout=10.0)
+            detail = detail_response.json()
+
+        # Trailer YouTube
+        trailer = None
+        for video in detail.get("videos", {}).get("results", []):
+            if video.get("type") == "Trailer" and video.get("site") == "YouTube":
+                trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                break
+
+        # Casting principal
+        cast = []
+        for person in detail.get("credits", {}).get("cast", [])[:5]:
+            cast.append(person.get("name"))
+
+        # Plateformes de streaming (France)
+        providers = []
+        watch_providers = detail.get("watch/providers", {}).get("results", {}).get("FR", {})
+        for p in watch_providers.get("flatrate", [])[:4]:
+            providers.append(p.get("provider_name"))
+
+        # Poster
+        poster_path = detail.get("poster_path")
+        poster_url = f"{TMDB_IMAGE_URL}{poster_path}" if poster_path else None
+
+        # Durée
+        runtime = detail.get("runtime")  # films
+        if not runtime:
+            episode_runtime = detail.get("episode_run_time", [])
+            runtime = episode_runtime[0] if episode_runtime else None
+
+        result = {
+            "poster_url": poster_url,
+            "overview": detail.get("overview"),
+            "vote_average": round(detail.get("vote_average", 0), 1),
+            "vote_count": detail.get("vote_count"),
+            "release_date": detail.get("release_date") or detail.get("first_air_date"),
+            "runtime": runtime,
+            "genres": [g["name"] for g in detail.get("genres", [])[:3]],
+            "cast": cast,
+            "trailer_url": trailer,
+            "providers": providers,
+            "tmdb_url": f"https://www.themoviedb.org/{req.media_type}/{item_id}",
+            "amazon_url": f"https://www.amazon.fr/s?k={req.title}",
+        }
+
+        return {"result": result}
+
+    except Exception as e:
+        print(f"ERREUR TMDB: {str(e)}")
+        return {"result": None}
