@@ -663,7 +663,7 @@ async def get_france_travail_token():
                 "grant_type": "client_credentials",
                 "client_id": FRANCE_TRAVAIL_CLIENT_ID,
                 "client_secret": FRANCE_TRAVAIL_CLIENT_SECRET,
-                "scope": "api_offresdemploiv2",
+                "scope": "api_offresdemploiv2 o2dsoffre",
             },
             timeout=10.0,
         )
@@ -739,6 +739,14 @@ async def search_france_travail(req: FranceTravailRequest, x_app_secret: str = H
         print(f"Réponse FT: {response.text[:300]}")
 
         if response.status_code == 204:
+            return {"results": []}
+
+        if response.status_code == 403:
+            print("Erreur 403 — scope insuffisant ou token invalide")
+            return {"results": []}
+
+        if response.status_code != 200:
+            print(f"Erreur HTTP {response.status_code}")
             return {"results": []}
 
         data = response.json()
