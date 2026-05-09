@@ -1116,16 +1116,12 @@ async def get_restaurant_details(req: RestaurantRequest, x_app_secret: str = Hea
         return {"result": None}
     
 
-
-
-
 @app.post("/recipe/details")
 async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
 
     try:
         async with httpx.AsyncClient() as client:
-            # Recherche par nom
             response = await client.get(
                 f"{THEMEALDB_URL}/search.php",
                 params={"s": req.title},
@@ -1134,7 +1130,6 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
             data = response.json()
 
         if not data.get("meals"):
-            # Essai avec le premier mot
             first_word = req.title.split()[0]
             async with httpx.AsyncClient() as client:
                 response2 = await client.get(
@@ -1160,22 +1155,77 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                     "measure": measure,
                 })
 
-        # Instructions — découper en étapes
+        # Instructions brutes
         instructions_raw = meal.get("strInstructions", "")
-        steps = []
+        steps_raw = []
         for step in instructions_raw.split("\r\n"):
             step = step.strip()
             if step and len(step) > 10:
-                steps.append(step)
+                steps_raw.append(step)
+
+        # Traduction via Claude
+        ingredients_str = "\n".join([f"- {i['measure']} {i['ingredient']}" for i in ingredients])
+        steps_str = "\n".join([f"{idx+1}. {s}" for idx, s in enumerate(steps_raw[:10])])
+
+        translation_prompt = f"""Traduis en français ces informations de recette de cuisine.
+
+NOM : {meal.get('strMeal')}
+CATÉGORIE : {meal.get('strCategory')}
+ORIGINE : {meal.get('strArea')}
+
+INGRÉDIENTS :
+{ingredients_str}
+
+ÉTAPES :
+{steps_str}
+
+Retourne UNIQUEMENT ce JSON valide :
+{{
+  "name_fr": "nom traduit",
+  "category_fr": "catégorie traduite",
+  "area_fr": "origine traduite",
+  "ingredients_fr": [
+    {{"ingredient": "ingrédient traduit", "measure": "mesure traduite"}}
+  ],
+  "steps_fr": [
+    "étape 1 traduite",
+    "étape 2 traduite"
+  ]
+}}"""
+
+        async with httpx.AsyncClient() as client:
+            claude_response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 1500,
+                    "messages": [{"role": "user", "content": translation_prompt}],
+                },
+                timeout=30.0,
+            )
+            translation_data = claude_response.json()
+            translation_text = translation_data['content'][0]['text']
+
+        # Parser la traduction
+        import re
+        json_match = re.search(r'\{[\s\S]*\}', translation_text)
+        translation = {}
+        if json_match:
+            translation = json.loads(json_match.group(0))
 
         result = {
-            "name": meal.get("strMeal"),
-            "category": meal.get("strCategory"),
-            "area": meal.get("strArea"),
+            "name": translation.get("name_fr") or meal.get("strMeal"),
+            "category": translation.get("category_fr") or meal.get("strCategory"),
+            "area": translation.get("area_fr") or meal.get("strArea"),
             "image_url": meal.get("strMealThumb"),
             "youtube_url": meal.get("strYoutube"),
-            "ingredients": ingredients,
-            "steps": steps[:10],  # Max 10 étapes
+            "ingredients": translation.get("ingredients_fr") or ingredients,
+            "steps": translation.get("steps_fr") or steps_raw[:10],
             "tags": meal.get("strTags", "").split(",") if meal.get("strTags") else [],
             "source": meal.get("strSource"),
         }
