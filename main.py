@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timedelta
 import uuid
 import json
+import re
 
 app = FastAPI()
 
@@ -1214,10 +1215,11 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
             return {"result": None}
 
         # Extraire les ingrédients
+        # APRÈS — protection contre None
         ingredients = []
         for i in range(1, 21):
-            ingredient = meal.get(f"strIngredient{i}", "").strip()
-            measure = meal.get(f"strMeasure{i}", "").strip()
+            ingredient = (meal.get(f"strIngredient{i}") or "").strip()
+            measure = (meal.get(f"strMeasure{i}") or "").strip()
             if ingredient:
                 ingredients.append({
                     "ingredient": ingredient,
