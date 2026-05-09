@@ -1186,14 +1186,33 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                     meal = data["meals"][0]
                     print(f"✅ Tentative 3 OK: {meal.get('strMeal')}")
 
-        # Tentative 4 — par ingrédient principal
+        # Tentative 4 — ingrédient générique extrait par Claude
         if not meal:
-            main_ingredient = req.title.split()[0].lower()
-            print(f"🔍 Tentative 4: ingrédient principal '{main_ingredient}'")
+            print(f"🔍 Tentative 4: ingrédient générique")
             async with httpx.AsyncClient() as client:
+                ingredient_response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": CLAUDE_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 10,
+                        "messages": [{
+                            "role": "user",
+                            "content": f'Give ONE simple English ingredient (chicken, beef, salmon, pasta...) from this recipe: "{req.title}". Reply ONLY with the ingredient word.'
+                        }],
+                    },
+                    timeout=10.0,
+                )
+                main_ing = ingredient_response.json()['content'][0]['text'].strip().lower()
+                print(f"🔍 Ingrédient générique: {main_ing}")
+
                 r = await client.get(
                     f"{THEMEALDB_URL}/filter.php",
-                    params={"i": main_ingredient},
+                    params={"i": main_ing},
                     timeout=10.0
                 )
                 data = r.json()
@@ -1208,6 +1227,7 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                     if data2.get("meals"):
                         meal = data2["meals"][0]
                         print(f"✅ Tentative 4 OK: {meal.get('strMeal')}")
+
 
         # Aucune recette trouvée
         if not meal:
