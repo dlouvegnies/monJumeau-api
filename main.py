@@ -1121,28 +1121,97 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
     verify_secret(x_app_secret)
 
     try:
+        meal = None
+
+        # Tentative 1 — titre complet
+        print(f"🔍 Recherche recette: {req.title}")
         async with httpx.AsyncClient() as client:
-            response = await client.get(
+            r = await client.get(
                 f"{THEMEALDB_URL}/search.php",
                 params={"s": req.title},
-                timeout=10.0,
+                timeout=10.0
             )
-            data = response.json()
+            data = r.json()
+            if data.get("meals"):
+                meal = data["meals"][0]
+                print(f"✅ Tentative 1 OK: {meal.get('strMeal')}")
 
-        if not data.get("meals"):
+        # Tentative 2 — premier mot significatif
+        if not meal:
             first_word = req.title.split()[0]
+            print(f"🔍 Tentative 2: premier mot '{first_word}'")
             async with httpx.AsyncClient() as client:
-                response2 = await client.get(
+                r = await client.get(
                     f"{THEMEALDB_URL}/search.php",
                     params={"s": first_word},
+                    timeout=10.0
+                )
+                data = r.json()
+                if data.get("meals"):
+                    meal = data["meals"][0]
+                    print(f"✅ Tentative 2 OK: {meal.get('strMeal')}")
+
+        # Tentative 3 — Claude simplifie en anglais
+        if not meal:
+            print(f"🔍 Tentative 3: simplification via Claude")
+            async with httpx.AsyncClient() as client:
+                simplify_response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": CLAUDE_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 20,
+                        "messages": [{
+                            "role": "user",
+                            "content": f'Give the simplified English name (1-3 words max) of this recipe for a database search. Reply ONLY with the name: "{req.title}"'
+                        }],
+                    },
                     timeout=10.0,
                 )
-                data = response2.json()
+                simplified = simplify_response.json()['content'][0]['text'].strip()
+                print(f"🔍 Titre simplifié: {simplified}")
 
-        if not data.get("meals"):
+                r = await client.get(
+                    f"{THEMEALDB_URL}/search.php",
+                    params={"s": simplified},
+                    timeout=10.0
+                )
+                data = r.json()
+                if data.get("meals"):
+                    meal = data["meals"][0]
+                    print(f"✅ Tentative 3 OK: {meal.get('strMeal')}")
+
+        # Tentative 4 — par ingrédient principal
+        if not meal:
+            main_ingredient = req.title.split()[0].lower()
+            print(f"🔍 Tentative 4: ingrédient principal '{main_ingredient}'")
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{THEMEALDB_URL}/filter.php",
+                    params={"i": main_ingredient},
+                    timeout=10.0
+                )
+                data = r.json()
+                if data.get("meals"):
+                    meal_id = data["meals"][0]["idMeal"]
+                    r2 = await client.get(
+                        f"{THEMEALDB_URL}/lookup.php",
+                        params={"i": meal_id},
+                        timeout=10.0
+                    )
+                    data2 = r2.json()
+                    if data2.get("meals"):
+                        meal = data2["meals"][0]
+                        print(f"✅ Tentative 4 OK: {meal.get('strMeal')}")
+
+        # Aucune recette trouvée
+        if not meal:
+            print(f"❌ Aucune recette trouvée pour: {req.title}")
             return {"result": None}
-
-        meal = data["meals"][0]
 
         # Extraire les ingrédients
         ingredients = []
@@ -1155,7 +1224,7 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                     "measure": measure,
                 })
 
-        # Instructions brutes
+        # Instructions — découper en étapes
         instructions_raw = meal.get("strInstructions", "")
         steps_raw = []
         for step in instructions_raw.split("\r\n"):
@@ -1163,13 +1232,26 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
             if step and len(step) > 10:
                 steps_raw.append(step)
 
+        # Si pas d'étapes avec \r\n, essayer avec \n
+        if not steps_raw:
+            for step in instructions_raw.split("\n"):
+                step = step.strip()
+                if step and len(step) > 10:
+                    steps_raw.append(step)
+
         # Traduction via Claude
-        ingredients_str = "\n".join([f"- {i['measure']} {i['ingredient']}" for i in ingredients])
-        steps_str = "\n".join([f"{idx+1}. {s}" for idx, s in enumerate(steps_raw[:10])])
+        ingredients_str = "\n".join([
+            f"- {i['measure']} {i['ingredient']}"
+            for i in ingredients
+        ])
+        steps_str = "\n".join([
+            f"{idx+1}. {s}"
+            for idx, s in enumerate(steps_raw[:10])
+        ])
 
         translation_prompt = f"""Traduis en français ces informations de recette de cuisine.
 
-NOM : {meal.get('strMeal')}
+NOM ORIGINAL : {meal.get('strMeal')}
 CATÉGORIE : {meal.get('strCategory')}
 ORIGINE : {meal.get('strArea')}
 
@@ -1179,17 +1261,17 @@ INGRÉDIENTS :
 ÉTAPES :
 {steps_str}
 
-Retourne UNIQUEMENT ce JSON valide :
+Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
 {{
-  "name_fr": "nom traduit",
-  "category_fr": "catégorie traduite",
-  "area_fr": "origine traduite",
+  "name_fr": "nom de la recette en français",
+  "category_fr": "catégorie traduite en français",
+  "area_fr": "origine traduite en français",
   "ingredients_fr": [
     {{"ingredient": "ingrédient traduit", "measure": "mesure traduite"}}
   ],
   "steps_fr": [
-    "étape 1 traduite",
-    "étape 2 traduite"
+    "étape 1 traduite et reformulée clairement en français",
+    "étape 2 traduite et reformulée clairement en français"
   ]
 }}"""
 
@@ -1203,7 +1285,7 @@ Retourne UNIQUEMENT ce JSON valide :
                 },
                 json={
                     "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 1500,
+                    "max_tokens": 2000,
                     "messages": [{"role": "user", "content": translation_prompt}],
                 },
                 timeout=30.0,
@@ -1212,11 +1294,14 @@ Retourne UNIQUEMENT ce JSON valide :
             translation_text = translation_data['content'][0]['text']
 
         # Parser la traduction
-        import re
         json_match = re.search(r'\{[\s\S]*\}', translation_text)
         translation = {}
         if json_match:
-            translation = json.loads(json_match.group(0))
+            try:
+                translation = json.loads(json_match.group(0))
+                print(f"✅ Traduction OK: {translation.get('name_fr')}")
+            except Exception as e:
+                print(f"⚠️ Erreur parsing traduction: {e}")
 
         result = {
             "name": translation.get("name_fr") or meal.get("strMeal"),
@@ -1226,12 +1311,14 @@ Retourne UNIQUEMENT ce JSON valide :
             "youtube_url": meal.get("strYoutube"),
             "ingredients": translation.get("ingredients_fr") or ingredients,
             "steps": translation.get("steps_fr") or steps_raw[:10],
-            "tags": meal.get("strTags", "").split(",") if meal.get("strTags") else [],
+            "tags": [t.strip() for t in meal.get("strTags", "").split(",") if t.strip()] if meal.get("strTags") else [],
             "source": meal.get("strSource"),
         }
 
         return {"result": result}
 
     except Exception as e:
-        print(f"ERREUR TheMealDB: {str(e)}")
+        print(f"❌ ERREUR get_recipe_details: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"result": None}
