@@ -42,6 +42,7 @@ SPOTIFY_API_URL = "https://api.spotify.com/v1"
 GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY")
 GOOGLE_PLACES_URL = "https://maps.googleapis.com/maps/api/place"
 
+THEMEALDB_URL = "https://www.themealdb.com/api/json/v1/1"
 
 spotify_token = None
 spotify_token_expiry = 0
@@ -176,6 +177,9 @@ class SpotifyRequest(BaseModel):
 class RestaurantRequest(BaseModel):
     name: str
     location: str = ''
+
+class RecipeRequest(BaseModel):
+    title: str
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -1109,4 +1113,75 @@ async def get_restaurant_details(req: RestaurantRequest, x_app_secret: str = Hea
 
     except Exception as e:
         print(f"ERREUR Google Places: {str(e)}")
+        return {"result": None}
+    
+
+
+
+
+@app.post("/recipe/details")
+async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Recherche par nom
+            response = await client.get(
+                f"{THEMEALDB_URL}/search.php",
+                params={"s": req.title},
+                timeout=10.0,
+            )
+            data = response.json()
+
+        if not data.get("meals"):
+            # Essai avec le premier mot
+            first_word = req.title.split()[0]
+            async with httpx.AsyncClient() as client:
+                response2 = await client.get(
+                    f"{THEMEALDB_URL}/search.php",
+                    params={"s": first_word},
+                    timeout=10.0,
+                )
+                data = response2.json()
+
+        if not data.get("meals"):
+            return {"result": None}
+
+        meal = data["meals"][0]
+
+        # Extraire les ingrédients
+        ingredients = []
+        for i in range(1, 21):
+            ingredient = meal.get(f"strIngredient{i}", "").strip()
+            measure = meal.get(f"strMeasure{i}", "").strip()
+            if ingredient:
+                ingredients.append({
+                    "ingredient": ingredient,
+                    "measure": measure,
+                })
+
+        # Instructions — découper en étapes
+        instructions_raw = meal.get("strInstructions", "")
+        steps = []
+        for step in instructions_raw.split("\r\n"):
+            step = step.strip()
+            if step and len(step) > 10:
+                steps.append(step)
+
+        result = {
+            "name": meal.get("strMeal"),
+            "category": meal.get("strCategory"),
+            "area": meal.get("strArea"),
+            "image_url": meal.get("strMealThumb"),
+            "youtube_url": meal.get("strYoutube"),
+            "ingredients": ingredients,
+            "steps": steps[:10],  # Max 10 étapes
+            "tags": meal.get("strTags", "").split(",") if meal.get("strTags") else [],
+            "source": meal.get("strSource"),
+        }
+
+        return {"result": result}
+
+    except Exception as e:
+        print(f"ERREUR TheMealDB: {str(e)}")
         return {"result": None}
