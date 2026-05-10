@@ -45,6 +45,9 @@ GOOGLE_PLACES_URL = "https://maps.googleapis.com/maps/api/place"
 
 THEMEALDB_URL = "https://www.themealdb.com/api/json/v1/1"
 
+SPOONACULAR_API_KEY = os.environ.get("SPOONACULAR_API_KEY")
+SPOONACULAR_URL = "https://api.spoonacular.com"
+
 spotify_token = None
 spotify_token_expiry = 0
 
@@ -181,6 +184,7 @@ class RestaurantRequest(BaseModel):
 
 class RecipeRequest(BaseModel):
     title: str
+
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -1122,40 +1126,31 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
     verify_secret(x_app_secret)
 
     try:
-        meal = None
+        print(f"🔍 Recherche recette Spoonacular: {req.title}")
 
-        # Tentative 1 — titre complet
-        print(f"🔍 Recherche recette: {req.title}")
         async with httpx.AsyncClient() as client:
-            r = await client.get(
-                f"{THEMEALDB_URL}/search.php",
-                params={"s": req.title},
-                timeout=10.0
+
+            # Étape 1 — Recherche par titre
+            search_response = await client.get(
+                f"{SPOONACULAR_URL}/recipes/complexSearch",
+                params={
+                    "apiKey": SPOONACULAR_API_KEY,
+                    "query": req.title,
+                    "language": "fr",
+                    "number": 1,
+                    "addRecipeInformation": True,
+                    "fillIngredients": True,
+                },
+                timeout=15.0,
             )
-            data = r.json()
-            if data.get("meals"):
-                meal = data["meals"][0]
-                print(f"✅ Tentative 1 OK: {meal.get('strMeal')}")
+            search_data = search_response.json()
+            print(f"Status Spoonacular: {search_response.status_code}")
 
-        # Tentative 2 — premier mot significatif
-        if not meal:
-            first_word = req.title.split()[0]
-            print(f"🔍 Tentative 2: premier mot '{first_word}'")
-            async with httpx.AsyncClient() as client:
-                r = await client.get(
-                    f"{THEMEALDB_URL}/search.php",
-                    params={"s": first_word},
-                    timeout=10.0
-                )
-                data = r.json()
-                if data.get("meals"):
-                    meal = data["meals"][0]
-                    print(f"✅ Tentative 2 OK: {meal.get('strMeal')}")
+            # Si pas de résultat en français, chercher en anglais
+            if not search_data.get("results"):
+                print("🔍 Tentative en anglais...")
 
-        # Tentative 3 — Claude simplifie en anglais
-        if not meal:
-            print(f"🔍 Tentative 3: simplification via Claude")
-            async with httpx.AsyncClient() as client:
+                # Simplifier le titre via Claude
                 simplify_response = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
@@ -1168,7 +1163,7 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                         "max_tokens": 20,
                         "messages": [{
                             "role": "user",
-                            "content": f'Give the simplified English name (1-3 words max) of this recipe for a database search. Reply ONLY with the name: "{req.title}"'
+                            "content": f'Give the simplified English name (1-4 words) of this recipe for a search. Reply ONLY with the name: "{req.title}"'
                         }],
                     },
                     timeout=10.0,
@@ -1176,90 +1171,60 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                 simplified = simplify_response.json()['content'][0]['text'].strip()
                 print(f"🔍 Titre simplifié: {simplified}")
 
-                r = await client.get(
-                    f"{THEMEALDB_URL}/search.php",
-                    params={"s": simplified},
-                    timeout=10.0
-                )
-                data = r.json()
-                if data.get("meals"):
-                    meal = data["meals"][0]
-                    print(f"✅ Tentative 3 OK: {meal.get('strMeal')}")
-
-        # Tentative 4 — ingrédient générique extrait par Claude
-        if not meal:
-            print(f"🔍 Tentative 4: ingrédient générique")
-            async with httpx.AsyncClient() as client:
-                ingredient_response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": CLAUDE_API_KEY,
-                        "anthropic-version": "2023-06-01",
-                        "Content-Type": "application/json",
+                search_response = await client.get(
+                    f"{SPOONACULAR_URL}/recipes/complexSearch",
+                    params={
+                        "apiKey": SPOONACULAR_API_KEY,
+                        "query": simplified,
+                        "number": 1,
+                        "addRecipeInformation": True,
+                        "fillIngredients": True,
                     },
-                    json={
-                        "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 10,
-                        "messages": [{
-                            "role": "user",
-                            "content": f'Give ONE simple English ingredient (chicken, beef, salmon, pasta...) from this recipe: "{req.title}". Reply ONLY with the ingredient word.'
-                        }],
-                    },
-                    timeout=10.0,
+                    timeout=15.0,
                 )
-                main_ing = ingredient_response.json()['content'][0]['text'].strip().lower()
-                print(f"🔍 Ingrédient générique: {main_ing}")
+                search_data = search_response.json()
 
-                r = await client.get(
-                    f"{THEMEALDB_URL}/filter.php",
-                    params={"i": main_ing},
-                    timeout=10.0
-                )
-                data = r.json()
-                if data.get("meals"):
-                    meal_id = data["meals"][0]["idMeal"]
-                    r2 = await client.get(
-                        f"{THEMEALDB_URL}/lookup.php",
-                        params={"i": meal_id},
-                        timeout=10.0
-                    )
-                    data2 = r2.json()
-                    if data2.get("meals"):
-                        meal = data2["meals"][0]
-                        print(f"✅ Tentative 4 OK: {meal.get('strMeal')}")
-
-
-        # Aucune recette trouvée
-        if not meal:
+        if not search_data.get("results"):
             print(f"❌ Aucune recette trouvée pour: {req.title}")
             return {"result": None}
 
+        recipe = search_data["results"][0]
+        recipe_id = recipe["id"]
+        print(f"✅ Recette trouvée: {recipe.get('title')}")
+
+        # Étape 2 — Détails complets avec instructions
+        async with httpx.AsyncClient() as client:
+            detail_response = await client.get(
+                f"{SPOONACULAR_URL}/recipes/{recipe_id}/information",
+                params={
+                    "apiKey": SPOONACULAR_API_KEY,
+                    "includeNutrition": False,
+                },
+                timeout=15.0,
+            )
+            detail = detail_response.json()
+
         # Extraire les ingrédients
-        # APRÈS — protection contre None
         ingredients = []
-        for i in range(1, 21):
-            ingredient = (meal.get(f"strIngredient{i}") or "").strip()
-            measure = (meal.get(f"strMeasure{i}") or "").strip()
-            if ingredient:
-                ingredients.append({
-                    "ingredient": ingredient,
-                    "measure": measure,
-                })
+        for ing in detail.get("extendedIngredients", []):
+            ingredients.append({
+                "ingredient": ing.get("name", ""),
+                "measure": f"{ing.get('amount', '')} {ing.get('unit', '')}".strip(),
+            })
 
-        # Instructions — découper en étapes
-        instructions_raw = meal.get("strInstructions", "")
+        # Extraire les étapes
         steps_raw = []
-        for step in instructions_raw.split("\r\n"):
-            step = step.strip()
-            if step and len(step) > 10:
-                steps_raw.append(step)
+        for instruction in detail.get("analyzedInstructions", []):
+            for step in instruction.get("steps", []):
+                steps_raw.append(step.get("step", ""))
 
-        # Si pas d'étapes avec \r\n, essayer avec \n
-        if not steps_raw:
-            for step in instructions_raw.split("\n"):
-                step = step.strip()
-                if step and len(step) > 10:
-                    steps_raw.append(step)
+        # Temps de préparation
+        ready_in = detail.get("readyInMinutes")
+        servings = detail.get("servings")
+
+        # Cuisines et régimes
+        cuisines = detail.get("cuisines", [])
+        diets = detail.get("diets", [])
 
         # Traduction via Claude
         ingredients_str = "\n".join([
@@ -1268,14 +1233,16 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
         ])
         steps_str = "\n".join([
             f"{idx+1}. {s}"
-            for idx, s in enumerate(steps_raw[:10])
+            for idx, s in enumerate(steps_raw[:12])
         ])
 
         translation_prompt = f"""Traduis en français ces informations de recette de cuisine.
 
-NOM ORIGINAL : {meal.get('strMeal')}
-CATÉGORIE : {meal.get('strCategory')}
-ORIGINE : {meal.get('strArea')}
+NOM ORIGINAL : {recipe.get('title')}
+CUISINES : {', '.join(cuisines) if cuisines else 'International'}
+RÉGIMES : {', '.join(diets) if diets else ''}
+TEMPS : {ready_in} minutes
+PORTIONS : {servings}
 
 INGRÉDIENTS :
 {ingredients_str}
@@ -1286,14 +1253,14 @@ INGRÉDIENTS :
 Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
 {{
   "name_fr": "nom de la recette en français",
-  "category_fr": "catégorie traduite en français",
-  "area_fr": "origine traduite en français",
+  "cuisine_fr": "type de cuisine en français",
+  "diets_fr": ["régime 1", "régime 2"],
   "ingredients_fr": [
     {{"ingredient": "ingrédient traduit", "measure": "mesure traduite"}}
   ],
   "steps_fr": [
-    "étape 1 traduite et reformulée clairement en français",
-    "étape 2 traduite et reformulée clairement en français"
+    "étape 1 traduite et reformulée clairement",
+    "étape 2 traduite"
   ]
 }}"""
 
@@ -1312,8 +1279,7 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
                 },
                 timeout=30.0,
             )
-            translation_data = claude_response.json()
-            translation_text = translation_data['content'][0]['text']
+            translation_text = claude_response.json()['content'][0]['text']
 
         # Parser la traduction
         json_match = re.search(r'\{[\s\S]*\}', translation_text)
@@ -1323,24 +1289,28 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
                 translation = json.loads(json_match.group(0))
                 print(f"✅ Traduction OK: {translation.get('name_fr')}")
             except Exception as e:
-                print(f"⚠️ Erreur parsing traduction: {e}")
+                print(f"⚠️ Erreur parsing: {e}")
 
         result = {
-            "name": translation.get("name_fr") or meal.get("strMeal"),
-            "category": translation.get("category_fr") or meal.get("strCategory"),
-            "area": translation.get("area_fr") or meal.get("strArea"),
-            "image_url": meal.get("strMealThumb"),
-            "youtube_url": meal.get("strYoutube"),
+            "name": translation.get("name_fr") or recipe.get("title"),
+            "category": translation.get("cuisine_fr") or (cuisines[0] if cuisines else "International"),
+            "area": translation.get("cuisine_fr") or "",
+            "diets": translation.get("diets_fr") or diets,
+            "image_url": recipe.get("image") or detail.get("image"),
+            "ready_in_minutes": ready_in,
+            "servings": servings,
             "ingredients": translation.get("ingredients_fr") or ingredients,
-            "steps": translation.get("steps_fr") or steps_raw[:10],
-            "tags": [t.strip() for t in meal.get("strTags", "").split(",") if t.strip()] if meal.get("strTags") else [],
-            "source": meal.get("strSource"),
+            "steps": translation.get("steps_fr") or steps_raw[:12],
+            "source_url": detail.get("sourceUrl"),
+            "spoonacular_url": f"https://spoonacular.com/recipes/{detail.get('title', '').replace(' ', '-').lower()}-{recipe_id}",
+            "youtube_url": None,
+            "tags": diets[:3] if diets else [],
         }
 
         return {"result": result}
 
     except Exception as e:
-        print(f"❌ ERREUR get_recipe_details: {str(e)}")
+        print(f"❌ ERREUR Spoonacular: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"result": None}
