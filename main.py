@@ -1330,66 +1330,47 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
 
     try:
-        print(f"🔍 News request: category={req.category}, keywords={req.keywords}, language={req.language}")
-        
+        # Mapping catégories → mots-clés français
+        CATEGORY_KEYWORDS = {
+            'general': 'actualité france',
+            'technology': 'technologie intelligence artificielle',
+            'science': 'science découverte recherche',
+            'business': 'économie entreprise bourse',
+            'entertainment': 'cinéma culture musique',
+            'sports': 'sport football tennis',
+            'health': 'santé médecine bien-être',
+        }
+
+        keywords = req.keywords or CATEGORY_KEYWORDS.get(req.category, 'actualité')
+
         async with httpx.AsyncClient() as client:
-            if req.keywords:
-                params = {
-                    "apiKey": NEWS_API_KEY,
-                    "q": req.keywords,
-                    "language": req.language,
-                    "sortBy": "publishedAt",
-                    "pageSize": req.page_size,
-                }
-                print(f"🔍 Everything search params: {params}")
-                response = await client.get(
-                    f"{NEWS_API_URL}/everything",
-                    params=params,
-                    timeout=15.0,
-                )
-            else:
-                params = {
-                    "apiKey": NEWS_API_KEY,
-                    "language": req.language,
-                    "pageSize": req.page_size,
-                }
-                if req.category != 'general':
-                    params["category"] = req.category
-                if req.language == 'fr':
-                    params["country"] = "fr"
+            params = {
+                "apiKey": NEWS_API_KEY,
+                "q": keywords,
+                "language": "fr",
+                "sortBy": "publishedAt",
+                "pageSize": req.page_size,
+            }
+            print(f"🔍 Everything search: {params}")
+            response = await client.get(
+                f"{NEWS_API_URL}/everything",
+                params=params,
+                timeout=15.0,
+            )
 
-                print(f"🔍 Top headlines params: {params}")
-                response = await client.get(
-                    f"{NEWS_API_URL}/top-headlines",
-                    params=params,
-                    timeout=15.0,
-                )
-
-        print(f"📰 Status: {response.status_code}")
-        print(f"📰 Réponse: {response.text[:300]}")
-        
         data = response.json()
-        print(f"📰 Total résultats: {data.get('totalResults', 0)}")
-        print(f"📰 Status API: {data.get('status')}")
-        print(f"📰 Message erreur: {data.get('message', 'aucun')}")
-
-        print(f"NewsAPI status: {response.status_code}")
-        print(f"NewsAPI total: {data.get('totalResults', 0)}")
+        print(f"📰 Total: {data.get('totalResults', 0)}")
 
         if data.get("status") != "ok":
-            print(f"NewsAPI error: {data.get('message')}")
             return {"articles": []}
 
         articles = []
         for article in data.get("articles", []):
-            # Filtrer les articles sans contenu
             if not article.get("title") or article.get("title") == "[Removed]":
                 continue
-
             articles.append({
                 "title": article.get("title"),
                 "description": article.get("description"),
-                "content": article.get("content", "")[:500] if article.get("content") else None,
                 "url": article.get("url"),
                 "image_url": article.get("urlToImage"),
                 "source": article.get("source", {}).get("name"),
