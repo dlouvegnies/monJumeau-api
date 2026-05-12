@@ -10,6 +10,10 @@ import uuid
 import json
 import re
 
+import feedparser
+from email.utils import parsedate_to_datetime
+import asyncio
+
 app = FastAPI()
 
 app.add_middleware(
@@ -117,6 +121,62 @@ def init_db():
     db.close()
 
 init_db()
+
+
+# ── RSS Sources par catégorie ──
+RSS_SOURCES = {
+    'general': [
+        ('Le Monde', 'https://www.lemonde.fr/rss/une.xml'),
+        ('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
+        ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
+        ('20 Minutes', 'https://www.20minutes.fr/feeds/rss/news'),
+        ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
+    ],
+    'technology': [
+        ('01net', 'https://www.01net.com/rss/info/flux-toutes-les-actualites/'),
+        ('Numerama', 'https://www.numerama.com/feed/'),
+        ('Frandroid', 'https://www.frandroid.com/feed'),
+        ('Korben', 'https://korben.info/feed'),
+        ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
+    ],
+    'science': [
+        ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
+        ('Futura Sciences', 'https://www.futura-sciences.com/rss/actualites.rss'),
+        ('Science Post', 'https://sciencepost.fr/feed/'),
+    ],
+    'business': [
+        ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
+        ('BFM Business', 'https://bfmbusiness.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/'),
+        ('Capital', 'https://www.capital.fr/feed'),
+    ],
+    'entertainment': [
+        ('Allociné', 'https://www.allocine.fr/rss/actu.xml'),
+        ('Première', 'https://www.premiere.fr/rss'),
+        ('Télérama', 'https://www.telerama.fr/rss.xml'),
+    ],
+    'sports': [
+        ("L'Equipe", 'https://www.lequipe.fr/rss/actu_rss.xml'),
+        ('RMC Sport', 'https://rmcsport.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/'),
+        ('Eurosport', 'https://www.eurosport.fr/rss.xml'),
+    ],
+    'health': [
+        ('Pourquoi Docteur', 'https://www.pourquoidocteur.fr/rss.xml'),
+        ('Top Santé', 'https://www.topsante.com/rss.xml'),
+        ('Santé Magazine', 'https://www.santemagazine.fr/feed'),
+    ],
+}
+
+CATEGORY_KEYWORDS = {
+    'general': 'actualité france',
+    'technology': 'technologie intelligence artificielle numérique',
+    'science': 'science découverte recherche',
+    'business': 'économie entreprise finance',
+    'entertainment': 'cinéma culture musique',
+    'sports': 'sport football tennis',
+    'health': 'santé médecine bien-être',
+}
+
+
 
 # ── MODÈLES ──
 class MessageRequest(BaseModel):
@@ -1382,4 +1442,181 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
 
     except Exception as e:
         print(f"ERREUR NewsAPI: {str(e)}")
+        return {"articles": []}
+    
+
+
+
+def extract_image_from_entry(entry):
+    """Extrait l'image d'un article RSS"""
+    # Media content
+    if hasattr(entry, 'media_content') and entry.media_content:
+        for media in entry.media_content:
+            if media.get('medium') == 'image' or 'image' in media.get('type', ''):
+                return media.get('url')
+
+    # Media thumbnail
+    if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
+        return entry.media_thumbnail[0].get('url')
+
+    # Enclosures
+    if hasattr(entry, 'enclosures') and entry.enclosures:
+        for enc in entry.enclosures:
+            if 'image' in enc.get('type', ''):
+                return enc.get('href')
+
+    # Image dans le contenu HTML
+    content = ''
+    if hasattr(entry, 'content') and entry.content:
+        content = entry.content[0].get('value', '')
+    elif hasattr(entry, 'summary'):
+        content = entry.summary or ''
+
+    img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', content)
+    if img_match:
+        url = img_match.group(1)
+        if url.startswith('http'):
+            return url
+
+    return None
+
+def parse_date(entry):
+    """Parse la date d'un article RSS"""
+    try:
+        if hasattr(entry, 'published'):
+            return parsedate_to_datetime(entry.published).isoformat()
+    except:
+        pass
+    try:
+        if hasattr(entry, 'updated'):
+            return parsedate_to_datetime(entry.updated).isoformat()
+    except:
+        pass
+    return datetime.now().isoformat()
+
+def clean_html(text):
+    """Supprime les balises HTML d'un texte"""
+    if not text:
+        return ''
+    clean = re.sub(r'<[^>]+>', '', text)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean[:300] if len(clean) > 300 else clean
+
+async def fetch_rss_source(source_name: str, url: str, max_items: int = 5):
+    """Fetch un flux RSS et retourne les articles"""
+    try:
+        loop = asyncio.get_event_loop()
+        feed = await loop.run_in_executor(None, feedparser.parse, url)
+
+        articles = []
+        for entry in feed.entries[:max_items]:
+            title = clean_html(entry.get('title', ''))
+            if not title or title == '[Removed]':
+                continue
+
+            articles.append({
+                "title": title,
+                "description": clean_html(entry.get('summary', '')),
+                "url": entry.get('link', ''),
+                "image_url": extract_image_from_entry(entry),
+                "source": source_name,
+                "published_at": parse_date(entry),
+                "author": entry.get('author', ''),
+                "source_type": "rss",
+            })
+
+        return articles
+    except Exception as e:
+        print(f"⚠️ Erreur RSS {source_name}: {str(e)}")
+        return []
+
+@app.post("/news/articles")
+async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        print(f"🔍 News request: category={req.category}, keywords={req.keywords}")
+
+        all_articles = []
+
+        # ── 1. Fetch RSS sources en parallèle ──
+        rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
+        rss_tasks = [
+            fetch_rss_source(name, url, max_items=4)
+            for name, url in rss_sources
+        ]
+        rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
+
+        for result in rss_results:
+            if isinstance(result, list):
+                all_articles.extend(result)
+
+        print(f"📰 RSS articles: {len(all_articles)}")
+
+        # ── 2. Fetch NewsAPI en complément ──
+        try:
+            keywords = req.keywords or CATEGORY_KEYWORDS.get(req.category, 'actualité')
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{NEWS_API_URL}/everything",
+                    params={
+                        "apiKey": NEWS_API_KEY,
+                        "q": keywords,
+                        "language": "fr",
+                        "sortBy": "publishedAt",
+                        "pageSize": 10,
+                    },
+                    timeout=15.0,
+                )
+            data = response.json()
+            for article in data.get("articles", []):
+                if not article.get("title") or article.get("title") == "[Removed]":
+                    continue
+                all_articles.append({
+                    "title": article.get("title"),
+                    "description": article.get("description"),
+                    "url": article.get("url"),
+                    "image_url": article.get("urlToImage"),
+                    "source": article.get("source", {}).get("name"),
+                    "published_at": article.get("publishedAt"),
+                    "author": article.get("author"),
+                    "source_type": "newsapi",
+                })
+            print(f"📰 NewsAPI articles: {len(data.get('articles', []))}")
+        except Exception as e:
+            print(f"⚠️ NewsAPI error: {str(e)}")
+
+        # ── 3. Dédupliquer par titre ──
+        seen_titles = set()
+        unique_articles = []
+        for article in all_articles:
+            title_key = article['title'][:50].lower().strip() if article.get('title') else ''
+            if title_key and title_key not in seen_titles:
+                seen_titles.add(title_key)
+                unique_articles.append(article)
+
+        # ── 4. Trier par date (plus récent en premier) ──
+        def sort_key(article):
+            try:
+                return datetime.fromisoformat(
+                    article.get('published_at', '').replace('Z', '+00:00')
+                )
+            except:
+                return datetime.min
+
+        unique_articles.sort(key=sort_key, reverse=True)
+
+        # ── 5. Filtrer les articles sans URL ou titre ──
+        final_articles = [
+            a for a in unique_articles
+            if a.get('title') and a.get('url')
+        ][:req.page_size]
+
+        print(f"✅ Total articles final: {len(final_articles)}")
+        return {"articles": final_articles}
+
+    except Exception as e:
+        print(f"❌ ERREUR get_news: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"articles": []}
