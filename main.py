@@ -266,6 +266,7 @@ class PersonalizedNewsRequest(BaseModel):
     context: dict = {}
     category: str = 'general'
     page_size: int = 15
+    feedback: dict = {}  # ← ajoute ça
 
 
 
@@ -1639,14 +1640,14 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
         return {"articles": []}
 
 
+
 @app.post("/news/personalized")
 async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
-
     try:
         print(f"🔍 Personalized news: category={req.category}")
 
-        # 1. Récupérer les articles
+        # 1. Récupérer les articles RSS
         all_articles = []
         rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
         rss_tasks = [
@@ -1658,7 +1659,7 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
             if isinstance(result, list):
                 all_articles.extend(result)
 
-        # NewsAPI en complément
+        # 2. NewsAPI en complément
         try:
             keywords = CATEGORY_KEYWORDS.get(req.category, 'actualité')
             async with httpx.AsyncClient() as client:
@@ -1687,11 +1688,11 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
         except Exception as e:
             print(f"⚠️ NewsAPI error: {str(e)}")
 
-        # Dédupliquer
+        # 3. Dédupliquer
         seen = set()
         unique = []
         for a in all_articles:
-            key = (a.get('title', '')[:50].lower())
+            key = a.get('title', '')[:50].lower()
             if key and key not in seen:
                 seen.add(key)
                 unique.append(a)
@@ -1699,13 +1700,13 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
         if not unique:
             return {"articles": []}
 
-        # 2. Préparer le résumé des articles pour Claude
+        # 4. Préparer le résumé des articles pour Claude
         articles_summary = "\n".join([
             f"{i+1}. [{a.get('source', '?')}] {a.get('title', '')} — {a.get('description', '')[:100] if a.get('description') else ''}"
             for i, a in enumerate(unique[:25])
         ])
 
-        # 3. Construire le profil
+        # 5. Construire le profil
         traits_str = ', '.join(req.profile_traits) if req.profile_traits else 'curieux, ouvert'
         context_lines = []
         if req.context.get('metier'): context_lines.append(f"Métier: {req.context['metier']}")
@@ -1714,20 +1715,31 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
         if req.context.get('valeurs'): context_lines.append(f"Valeurs: {', '.join(req.context.get('valeurs', []))}")
         context_str = '\n'.join(context_lines) if context_lines else ''
 
-        # 4. Claude sélectionne et commente
+        # 6. Feedback utilisateur
+        liked = req.feedback.get('liked', [])
+        disliked = req.feedback.get('disliked', [])
+        liked_str = ', '.join(liked[:5]) if liked else 'aucun'
+        disliked_str = ', '.join(disliked[:5]) if disliked else 'aucun'
+        feedback_str = f"""
+HISTORIQUE DES PRÉFÉRENCES :
+- Articles appréciés (4-5⭐) : {liked_str}
+- Articles non appréciés (1-2⭐) : {disliked_str}
+Tiens compte de ces préférences pour sélectionner les articles.
+""" if liked or disliked else ''
+
+        # 7. Claude sélectionne et commente
         prompt = f"""Tu es un assistant de curation d'actualités personnalisées.
 
 PROFIL DE L'UTILISATEUR :
 - Traits : {traits_str}
 - Personnalité : extraversion {req.personality.get('extraversion', 0.5)}, ouverture {req.personality.get('openness', 0.5)}, curiosité {req.personality.get('curiosity', 0.5)}
 {context_str}
-
+{feedback_str}
 ARTICLES DISPONIBLES :
 {articles_summary}
 
 Sélectionne les 5 articles les plus pertinents pour ce profil et explique brièvement pourquoi chacun correspond.
-
-Retourne UNIQUEMENT ce JSON valide :
+Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
 {{
   "selected": [
     {{
@@ -1747,15 +1759,16 @@ Retourne UNIQUEMENT ce JSON valide :
                 },
                 json={
                     "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 500,
+                    "max_tokens": 600,
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=20.0,
             )
             claude_data = claude_response.json()
             claude_text = claude_data['content'][0]['text']
+            print(f"Claude réponse: {claude_text[:200]}")
 
-        # 5. Parser la réponse Claude
+        # 8. Parser la réponse Claude
         json_match = re.search(r'\{[\s\S]*\}', claude_text)
         personalized = []
 
