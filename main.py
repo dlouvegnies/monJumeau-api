@@ -133,7 +133,7 @@ RSS_SOURCES = {
         ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
     ],
     'technology': [
-        ('01net', 'https://www.01net.com/rss/info/flux-toutes-les-actualites/'),
+        ('01net', 'https://www.01net.com/actualites/feed/'),
         ('Numerama', 'https://www.numerama.com/feed/'),
         ('Frandroid', 'https://www.frandroid.com/feed'),
         ('Korben', 'https://korben.info/feed'),
@@ -146,13 +146,20 @@ RSS_SOURCES = {
     ],
     'business': [
         ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
-        ('BFM Business', 'https://bfmbusiness.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/'),
-        ('Capital', 'https://www.capital.fr/feed'),
+        ('Le Point Economie', 'https://www.lepoint.fr/economie/rss.xml'),
+        ('BFM Business', 'https://www.bfmtv.com/rss/economie/'),
+        ('Le Monde', 'https://www.lemonde.fr/economie-francaise/rss_full.xml'),
+        ('Le Monde', 'https://www.lemonde.fr/economie-mondiale/rss_full.xml'),
+        ('20 minutes', 'https://www.20minutes.fr/feeds/rss-economie.xml'),
+         
     ],
     'entertainment': [
-        ('Allociné', 'https://www.allocine.fr/rss/actu.xml'),
-        ('Première', 'https://www.premiere.fr/rss'),
-        ('Télérama', 'https://www.telerama.fr/rss.xml'),
+        ('Allociné', 'https://www.allocine.fr/rss/news.xml'),
+        ('Première', 'http://www.premiere.fr/rss/actu-live'),
+        ('Télérama', 'https://www.telerama.fr/rss/latest-articles.xml'),
+        ('Télérama', 'https://www.telerama.fr/rss/une.xml'),
+
+        
     ],
     'sports': [
         ("L'Equipe", 'https://www.lequipe.fr/rss/actu_rss.xml'),
