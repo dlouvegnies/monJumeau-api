@@ -258,7 +258,19 @@ class NewsRequest(BaseModel):
     category: str = 'general'
     keywords: str = ''
     language: str = 'fr'
-    page_size: int = 10
+    page_size: int = 15
+
+class PersonalizedNewsRequest(BaseModel):
+    profile_traits: list = []
+    personality: dict = {}
+    context: dict = {}
+    category: str = 'general'
+    page_size: int = 15
+
+
+
+
+
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -1622,6 +1634,145 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
 
     except Exception as e:
         print(f"❌ ERREUR get_news: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"articles": []}
+
+
+@app.post("/news/personalized")
+async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        print(f"🔍 Personalized news: category={req.category}")
+
+        # 1. Récupérer les articles
+        all_articles = []
+        rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
+        rss_tasks = [
+            fetch_rss_source(name, url, max_items=5)
+            for name, url in rss_sources
+        ]
+        rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
+        for result in rss_results:
+            if isinstance(result, list):
+                all_articles.extend(result)
+
+        # NewsAPI en complément
+        try:
+            keywords = CATEGORY_KEYWORDS.get(req.category, 'actualité')
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{NEWS_API_URL}/everything",
+                    params={
+                        "apiKey": NEWS_API_KEY,
+                        "q": keywords,
+                        "language": "fr",
+                        "sortBy": "publishedAt",
+                        "pageSize": 10,
+                    },
+                    timeout=15.0,
+                )
+            data = response.json()
+            for article in data.get("articles", []):
+                if article.get("title") and article.get("title") != "[Removed]":
+                    all_articles.append({
+                        "title": article.get("title"),
+                        "description": article.get("description"),
+                        "url": article.get("url"),
+                        "image_url": article.get("urlToImage"),
+                        "source": article.get("source", {}).get("name"),
+                        "published_at": article.get("publishedAt"),
+                    })
+        except Exception as e:
+            print(f"⚠️ NewsAPI error: {str(e)}")
+
+        # Dédupliquer
+        seen = set()
+        unique = []
+        for a in all_articles:
+            key = (a.get('title', '')[:50].lower())
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(a)
+
+        if not unique:
+            return {"articles": []}
+
+        # 2. Préparer le résumé des articles pour Claude
+        articles_summary = "\n".join([
+            f"{i+1}. [{a.get('source', '?')}] {a.get('title', '')} — {a.get('description', '')[:100] if a.get('description') else ''}"
+            for i, a in enumerate(unique[:25])
+        ])
+
+        # 3. Construire le profil
+        traits_str = ', '.join(req.profile_traits) if req.profile_traits else 'curieux, ouvert'
+        context_lines = []
+        if req.context.get('metier'): context_lines.append(f"Métier: {req.context['metier']}")
+        if req.context.get('ville'): context_lines.append(f"Ville: {req.context['ville']}")
+        if req.context.get('passions'): context_lines.append(f"Passions: {', '.join(req.context.get('passions', []))}")
+        if req.context.get('valeurs'): context_lines.append(f"Valeurs: {', '.join(req.context.get('valeurs', []))}")
+        context_str = '\n'.join(context_lines) if context_lines else ''
+
+        # 4. Claude sélectionne et commente
+        prompt = f"""Tu es un assistant de curation d'actualités personnalisées.
+
+PROFIL DE L'UTILISATEUR :
+- Traits : {traits_str}
+- Personnalité : extraversion {req.personality.get('extraversion', 0.5)}, ouverture {req.personality.get('openness', 0.5)}, curiosité {req.personality.get('curiosity', 0.5)}
+{context_str}
+
+ARTICLES DISPONIBLES :
+{articles_summary}
+
+Sélectionne les 5 articles les plus pertinents pour ce profil et explique brièvement pourquoi chacun correspond.
+
+Retourne UNIQUEMENT ce JSON valide :
+{{
+  "selected": [
+    {{
+      "index": 1,
+      "why": "Explication courte (1 phrase) pourquoi cet article correspond au profil"
+    }}
+  ]
+}}"""
+
+        async with httpx.AsyncClient() as client:
+            claude_response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 500,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=20.0,
+            )
+            claude_data = claude_response.json()
+            claude_text = claude_data['content'][0]['text']
+
+        # 5. Parser la réponse Claude
+        json_match = re.search(r'\{[\s\S]*\}', claude_text)
+        personalized = []
+
+        if json_match:
+            selection = json.loads(json_match.group(0))
+            for item in selection.get('selected', []):
+                idx = item.get('index', 1) - 1
+                if 0 <= idx < len(unique):
+                    article = unique[idx].copy()
+                    article['why'] = item.get('why', '')
+                    personalized.append(article)
+
+        print(f"✅ Articles personnalisés: {len(personalized)}")
+        return {"articles": personalized}
+
+    except Exception as e:
+        print(f"❌ ERREUR personalized news: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"articles": []}
