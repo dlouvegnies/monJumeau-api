@@ -1748,7 +1748,7 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
     }}
   ]
 }}"""
-
+        
         async with httpx.AsyncClient() as client:
             claude_response = await client.post(
                 "https://api.anthropic.com/v1/messages",
@@ -1766,6 +1766,7 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
             )
             claude_data = claude_response.json()
             claude_text = claude_data['content'][0]['text']
+            print(f"Claude PROMPT: {prompt}")
             print(f"Claude réponse: {claude_text[:200]}")
 
         # 8. Parser la réponse Claude
