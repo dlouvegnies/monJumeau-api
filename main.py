@@ -48,6 +48,10 @@ THEMEALDB_URL = "https://www.themealdb.com/api/json/v1/1"
 SPOONACULAR_API_KEY = os.environ.get("SPOONACULAR_API_KEY")
 SPOONACULAR_URL = "https://api.spoonacular.com"
 
+NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+NEWS_API_URL = "https://newsapi.org/v2"
+
+
 spotify_token = None
 spotify_token_expiry = 0
 
@@ -185,6 +189,11 @@ class RestaurantRequest(BaseModel):
 class RecipeRequest(BaseModel):
     title: str
 
+class NewsRequest(BaseModel):
+    category: str = 'general'
+    keywords: str = ''
+    language: str = 'fr'
+    page_size: int = 10
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
@@ -1314,3 +1323,73 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
         import traceback
         traceback.print_exc()
         return {"result": None}
+    
+
+@app.post("/news/articles")
+async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    try:
+        async with httpx.AsyncClient() as client:
+
+            # Si mots-clés → recherche
+            if req.keywords:
+                response = await client.get(
+                    f"{NEWS_API_URL}/everything",
+                    params={
+                        "apiKey": NEWS_API_KEY,
+                        "q": req.keywords,
+                        "language": req.language,
+                        "sortBy": "publishedAt",
+                        "pageSize": req.page_size,
+                    },
+                    timeout=15.0,
+                )
+            else:
+                # Sinon → top headlines par catégorie
+                params = {
+                    "apiKey": NEWS_API_KEY,
+                    "language": req.language,
+                    "pageSize": req.page_size,
+                }
+                if req.category != 'general':
+                    params["category"] = req.category
+                if req.language == 'fr':
+                    params["country"] = "fr"
+
+                response = await client.get(
+                    f"{NEWS_API_URL}/top-headlines",
+                    params=params,
+                    timeout=15.0,
+                )
+
+        data = response.json()
+        print(f"NewsAPI status: {response.status_code}")
+        print(f"NewsAPI total: {data.get('totalResults', 0)}")
+
+        if data.get("status") != "ok":
+            print(f"NewsAPI error: {data.get('message')}")
+            return {"articles": []}
+
+        articles = []
+        for article in data.get("articles", []):
+            # Filtrer les articles sans contenu
+            if not article.get("title") or article.get("title") == "[Removed]":
+                continue
+
+            articles.append({
+                "title": article.get("title"),
+                "description": article.get("description"),
+                "content": article.get("content", "")[:500] if article.get("content") else None,
+                "url": article.get("url"),
+                "image_url": article.get("urlToImage"),
+                "source": article.get("source", {}).get("name"),
+                "published_at": article.get("publishedAt"),
+                "author": article.get("author"),
+            })
+
+        return {"articles": articles}
+
+    except Exception as e:
+        print(f"ERREUR NewsAPI: {str(e)}")
+        return {"articles": []}
