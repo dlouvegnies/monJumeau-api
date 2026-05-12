@@ -1385,8 +1385,8 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
         return {"result": None}
     
 
-@app.post("/news/articles")
-async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
+@app.post("/news/articles_old")
+async def get_news_old(req: NewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
 
     try:
