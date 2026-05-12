@@ -159,11 +159,11 @@ RSS_SOURCES = {
         ('Télérama', 'https://www.telerama.fr/rss/latest-articles.xml'),
         ('Télérama', 'https://www.telerama.fr/rss/une.xml'),
 
-        
+        https://rmcsport.bfmtv.com/rss/football/
     ],
     'sports': [
-        ("L'Equipe", 'https://www.lequipe.fr/rss/actu_rss.xml'),
-        ('RMC Sport', 'https://rmcsport.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/'),
+        ("L'Equipe", 'https://dwh.lequipe.fr/api/edito/rss?path=/'),
+        ('RMC Sport', 'https://rmcsport.bfmtv.com/rss/football/'),
         ('Eurosport', 'https://www.eurosport.fr/rss.xml'),
     ],
     'health': [
