@@ -1330,23 +1330,24 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
 
     try:
+        print(f"🔍 News request: category={req.category}, keywords={req.keywords}, language={req.language}")
+        
         async with httpx.AsyncClient() as client:
-
-            # Si mots-clés → recherche
             if req.keywords:
+                params = {
+                    "apiKey": NEWS_API_KEY,
+                    "q": req.keywords,
+                    "language": req.language,
+                    "sortBy": "publishedAt",
+                    "pageSize": req.page_size,
+                }
+                print(f"🔍 Everything search params: {params}")
                 response = await client.get(
                     f"{NEWS_API_URL}/everything",
-                    params={
-                        "apiKey": NEWS_API_KEY,
-                        "q": req.keywords,
-                        "language": req.language,
-                        "sortBy": "publishedAt",
-                        "pageSize": req.page_size,
-                    },
+                    params=params,
                     timeout=15.0,
                 )
             else:
-                # Sinon → top headlines par catégorie
                 params = {
                     "apiKey": NEWS_API_KEY,
                     "language": req.language,
@@ -1357,13 +1358,21 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
                 if req.language == 'fr':
                     params["country"] = "fr"
 
+                print(f"🔍 Top headlines params: {params}")
                 response = await client.get(
                     f"{NEWS_API_URL}/top-headlines",
                     params=params,
                     timeout=15.0,
                 )
 
+        print(f"📰 Status: {response.status_code}")
+        print(f"📰 Réponse: {response.text[:300]}")
+        
         data = response.json()
+        print(f"📰 Total résultats: {data.get('totalResults', 0)}")
+        print(f"📰 Status API: {data.get('status')}")
+        print(f"📰 Message erreur: {data.get('message', 'aucun')}")
+
         print(f"NewsAPI status: {response.status_code}")
         print(f"NewsAPI total: {data.get('totalResults', 0)}")
 
