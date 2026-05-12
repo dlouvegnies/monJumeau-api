@@ -158,8 +158,6 @@ RSS_SOURCES = {
         ('Première', 'http://www.premiere.fr/rss/actu-live'),
         ('Télérama', 'https://www.telerama.fr/rss/latest-articles.xml'),
         ('Télérama', 'https://www.telerama.fr/rss/une.xml'),
-
-        https://rmcsport.bfmtv.com/rss/football/
     ],
     'sports': [
         ("L'Equipe", 'https://dwh.lequipe.fr/api/edito/rss?path=/'),
