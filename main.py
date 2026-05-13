@@ -55,6 +55,9 @@ SPOONACULAR_URL = "https://api.spoonacular.com"
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 NEWS_API_URL = "https://newsapi.org/v2"
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 
 spotify_token = None
 spotify_token_expiry = 0
@@ -1521,11 +1524,41 @@ def clean_html(text):
     return clean[:300] if len(clean) > 300 else clean
 
 async def fetch_rss_source(source_name: str, url: str, max_items: int = 5):
-    """Fetch un flux RSS et retourne les articles"""
+    """Fetch un flux RSS et retourne les articles.
+    Marque automatiquement le flux inactif dans Supabase s'il est vraiment mort.
+    """
     try:
         loop = asyncio.get_event_loop()
-        feed = await loop.run_in_executor(None, feedparser.parse, url)
 
+        # Fetch avec timeout via executor
+        feed = await asyncio.wait_for(
+            loop.run_in_executor(None, feedparser.parse, url),
+            timeout=15.0
+        )
+
+        # Flux vraiment mort — domaine inexistant ou erreur réseau fatale
+        if feed.bozo and not feed.entries:
+            bozo_exception = str(feed.get('bozo_exception', ''))
+            # Erreurs fatales → marquer inactif
+            fatal_errors = [
+                'Name or service not known',
+                'nodename nor servname provided',
+                'No address associated',
+                'Connection refused',
+                'No route to host',
+                'urlopen error',
+            ]
+            is_fatal = any(err in bozo_exception for err in fatal_errors)
+            if is_fatal:
+                print(f"💀 Flux mort, marquage inactif : {source_name}")
+                await mark_feed_inactive(url)
+            return []
+
+        # Flux vivant mais vide → pas de marquage
+        if not feed.entries:
+            return []
+
+        # Parser les articles
         articles = []
         for entry in feed.entries[:max_items]:
             title = clean_html(entry.get('title', ''))
@@ -1544,9 +1577,36 @@ async def fetch_rss_source(source_name: str, url: str, max_items: int = 5):
             })
 
         return articles
-    except Exception as e:
-        print(f"⚠️ Erreur RSS {source_name}: {str(e)}")
+
+    except asyncio.TimeoutError:
+        # Timeout → lent mais pas forcément mort
+        print(f"⏱ Timeout RSS {source_name} — ignoré")
         return []
+    except Exception as e:
+        print(f"⚠️ Erreur RSS {source_name}: {str(e)[:100]}")
+        return []
+
+
+async def mark_feed_inactive(url: str):
+    """Marque un flux comme inactif dans Supabase"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/rss_feeds",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                params={"feed_url": f"eq.{url}"},
+                json={"is_active": False},
+                timeout=5.0,
+            )
+    except Exception as e:
+        print(f"⚠️ Erreur mark_feed_inactive: {str(e)[:50]}")
+
 
 @app.post("/news/articles")
 async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
