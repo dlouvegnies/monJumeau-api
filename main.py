@@ -270,6 +270,8 @@ class PersonalizedNewsRequest(BaseModel):
     category: str = 'general'
     page_size: int = 15
     feedback: dict = {}  # ← ajoute ça
+    interests: list = []   # ← ajoute ça
+    locations: list = []   # ← ajoute ça
 
 
 
@@ -1717,7 +1719,18 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
         # 1. Récupérer les articles RSS
         all_articles = []
         #AVANT rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
-        rss_sources = await get_feeds_from_supabase(category=req.category, limit=20)
+        #rss_sources = await get_feeds_from_supabase(category=req.category, limit=20)
+        # Récupérer les flux depuis Supabase
+        # Si centres d'intérêt → recherche dans sous_categorie
+        # Si lieux → recherche dans region/ville
+        rss_sources = await get_feeds_from_supabase(
+            category=req.category,
+            limit=20,
+            interests=req.interests,
+            locations=req.locations,
+        )    
+
+
         rss_tasks = [
             fetch_rss_source(name, url, max_items=5)
             for name, url in rss_sources
@@ -1860,38 +1873,29 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
         return {"articles": []}
     
 
-async def get_feeds_from_supabase(category: str, limit: int = 15, region: str = None, is_youtube: bool = False):
-    """Récupère des flux actifs depuis Supabase selon la catégorie"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        # Fallback sur RSS_SOURCES hardcodé
-        return RSS_SOURCES.get(category, RSS_SOURCES['general'])
-
+async def get_feeds_from_supabase(
+    category: str, limit: int = 15,
+    region: str = None,
+    interests: list = [],
+    locations: list = []
+):
     try:
+        all_feeds = []
+
+        # Flux par catégorie principale
         params = {
             "select": "source_name,feed_url",
             "is_active": "eq.true",
-            "is_youtube": f"eq.{str(is_youtube).lower()}",
+            "is_youtube": "eq.false",
             "limit": str(limit),
-            "order": "id.asc",
         }
-
-        # Filtre catégorie
         cat_map = {
-            'general':       'presse',
-            'technology':    'technologie',
-            'science':       'culture',
-            'business':      'économie',
-            'entertainment': 'culture',
-            'sports':        'sport',
-            'health':        'culture',
-            'local':         'local',
+            'general': 'presse', 'technology': 'technologie',
+            'science': 'culture', 'business': 'économie',
+            'entertainment': 'culture', 'sports': 'sport',
+            'health': 'culture', 'local': 'local',
         }
-        supabase_cat = cat_map.get(category, 'presse')
-        params["categorie"] = f"eq.{supabase_cat}"
-
-        # Filtre région optionnel
-        if region:
-            params["region"] = f"ilike.%{region}%"
+        params["categorie"] = f"eq.{cat_map.get(category, 'presse')}"
 
         async with httpx.AsyncClient() as client:
             r = await client.get(
@@ -1903,20 +1907,65 @@ async def get_feeds_from_supabase(category: str, limit: int = 15, region: str = 
                 params=params,
                 timeout=10.0,
             )
-
         feeds = r.json()
-        if not feeds or not isinstance(feeds, list):
-            return RSS_SOURCES.get(category, RSS_SOURCES['general'])
+        if isinstance(feeds, list):
+            all_feeds.extend([(f['source_name'], f['feed_url']) for f in feeds])
 
-        print(f"📡 Supabase: {len(feeds)} flux pour catégorie '{supabase_cat}'")
-        for f in feeds:
-            print(f"   → {f['source_name']} | {f['feed_url']}")
+        # Flux par centres d'intérêt → sous_categorie
+        for interest in interests[:3]:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rss_feeds",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                    },
+                    params={
+                        "select": "source_name,feed_url",
+                        "is_active": "eq.true",
+                        "sous_categorie": f"ilike.%{interest}%",
+                        "limit": "5",
+                    },
+                    timeout=10.0,
+                )
+            interest_feeds = r.json()
+            if isinstance(interest_feeds, list):
+                all_feeds.extend([(f['source_name'], f['feed_url']) for f in interest_feeds])
+                print(f"🎯 Intérêt '{interest}': {len(interest_feeds)} flux")
 
-        return [(f['source_name'], f['feed_url']) for f in feeds]
+        # Flux par lieux → region ou ville
+        for location in locations[:3]:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rss_feeds",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                    },
+                    params={
+                        "select": "source_name,feed_url",
+                        "is_active": "eq.true",
+                        "or": f"(region.ilike.%{location}%,ville.ilike.%{location}%,departement.ilike.%{location}%)",
+                        "limit": "5",
+                    },
+                    timeout=10.0,
+                )
+            location_feeds = r.json()
+            if isinstance(location_feeds, list):
+                all_feeds.extend([(f['source_name'], f['feed_url']) for f in location_feeds])
+                print(f"📍 Lieu '{location}': {len(location_feeds)} flux")
+
+        # Dédupliquer par URL
+        seen = set()
+        unique_feeds = []
+        for name, url in all_feeds:
+            if url not in seen:
+                seen.add(url)
+                unique_feeds.append((name, url))
+
+        print(f"📡 Total flux sélectionnés: {len(unique_feeds)}")
+        return unique_feeds or RSS_SOURCES.get(category, RSS_SOURCES['general'])
 
     except Exception as e:
         print(f"⚠️ Erreur Supabase get_feeds: {str(e)}")
         return RSS_SOURCES.get(category, RSS_SOURCES['general'])
-    
-
-
