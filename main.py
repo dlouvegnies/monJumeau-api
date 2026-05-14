@@ -1617,21 +1617,24 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
 
         all_articles = []
 
-        # ── 1. Fetch RSS sources en parallèle ──
-        rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
+        # ── 1. Fetch RSS depuis Supabase ──
+        rss_sources = await get_feeds_from_supabase(
+            category=req.category,
+            limit=15,
+        )
+
         rss_tasks = [
             fetch_rss_source(name, url, max_items=4)
             for name, url in rss_sources
         ]
         rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
-
         for result in rss_results:
             if isinstance(result, list):
                 all_articles.extend(result)
 
         print(f"📰 RSS articles: {len(all_articles)}")
 
-        # ── 2. Fetch NewsAPI en complément ──
+        # ── 2. NewsAPI en complément ──
         try:
             keywords = req.keywords or CATEGORY_KEYWORDS.get(req.category, 'actualité')
             async with httpx.AsyncClient() as client:
@@ -1648,50 +1651,45 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
                 )
             data = response.json()
             for article in data.get("articles", []):
-                if not article.get("title") or article.get("title") == "[Removed]":
-                    continue
-                all_articles.append({
-                    "title": article.get("title"),
-                    "description": article.get("description"),
-                    "url": article.get("url"),
-                    "image_url": article.get("urlToImage"),
-                    "source": article.get("source", {}).get("name"),
-                    "published_at": article.get("publishedAt"),
-                    "author": article.get("author"),
-                    "source_type": "newsapi",
-                })
+                if article.get("title") and article.get("title") != "[Removed]":
+                    all_articles.append({
+                        "title": article.get("title"),
+                        "description": article.get("description"),
+                        "url": article.get("url"),
+                        "image_url": article.get("urlToImage"),
+                        "source": article.get("source", {}).get("name"),
+                        "published_at": article.get("publishedAt"),
+                        "source_type": "newsapi",
+                    })
             print(f"📰 NewsAPI articles: {len(data.get('articles', []))}")
         except Exception as e:
             print(f"⚠️ NewsAPI error: {str(e)}")
 
-        # ── 3. Dédupliquer par titre ──
-        seen_titles = set()
-        unique_articles = []
-        for article in all_articles:
-            title_key = article['title'][:50].lower().strip() if article.get('title') else ''
-            if title_key and title_key not in seen_titles:
-                seen_titles.add(title_key)
-                unique_articles.append(article)
+        # ── 3. Dédupliquer ──
+        seen = set()
+        unique = []
+        for a in all_articles:
+            key = a.get('title', '')[:50].lower()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(a)
 
-        # ── 4. Trier par date (plus récent en premier) ──
-        def sort_key(article):
+        # ── 4. Trier par date ──
+        def sort_key(a):
             try:
                 return datetime.fromisoformat(
-                    article.get('published_at', '').replace('Z', '+00:00')
+                    a.get('published_at', '').replace('Z', '+00:00')
                 )
             except:
                 return datetime.min
 
-        unique_articles.sort(key=sort_key, reverse=True)
+        unique.sort(key=sort_key, reverse=True)
 
-        # ── 5. Filtrer les articles sans URL ou titre ──
-        final_articles = [
-            a for a in unique_articles
-            if a.get('title') and a.get('url')
-        ][:req.page_size]
+        # ── 5. Filtrer et retourner ──
+        final = [a for a in unique if a.get('title') and a.get('url')][:req.page_size]
 
-        print(f"✅ Total articles final: {len(final_articles)}")
-        return {"articles": final_articles}
+        print(f"✅ Total articles final: {len(final)}")
+        return {"articles": final}
 
     except Exception as e:
         print(f"❌ ERREUR get_news: {str(e)}")
@@ -1709,7 +1707,8 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
 
         # 1. Récupérer les articles RSS
         all_articles = []
-        rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
+        #AVANT rss_sources = RSS_SOURCES.get(req.category, RSS_SOURCES['general'])
+        rss_sources = await get_feeds_from_supabase(category=req.category, limit=20)
         rss_tasks = [
             fetch_rss_source(name, url, max_items=5)
             for name, url in rss_sources
@@ -1850,3 +1849,59 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
         import traceback
         traceback.print_exc()
         return {"articles": []}
+    
+
+async def get_feeds_from_supabase(category: str, limit: int = 15, region: str = None, is_youtube: bool = False):
+    """Récupère des flux actifs depuis Supabase selon la catégorie"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        # Fallback sur RSS_SOURCES hardcodé
+        return RSS_SOURCES.get(category, RSS_SOURCES['general'])
+
+    try:
+        params = {
+            "select": "source_name,feed_url",
+            "is_active": "eq.true",
+            "is_youtube": f"eq.{str(is_youtube).lower()}",
+            "limit": str(limit),
+            "order": "id.asc",
+        }
+
+        # Filtre catégorie
+        cat_map = {
+            'general':       'presse',
+            'technology':    'technologie',
+            'science':       'culture',
+            'business':      'économie',
+            'entertainment': 'culture',
+            'sports':        'sport',
+            'health':        'culture',
+            'local':         'local',
+        }
+        supabase_cat = cat_map.get(category, 'presse')
+        params["categorie"] = f"eq.{supabase_cat}"
+
+        # Filtre région optionnel
+        if region:
+            params["region"] = f"ilike.%{region}%"
+
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/rss_feeds",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                params=params,
+                timeout=10.0,
+            )
+
+        feeds = r.json()
+        if not feeds or not isinstance(feeds, list):
+            return RSS_SOURCES.get(category, RSS_SOURCES['general'])
+
+        print(f"📡 Supabase: {len(feeds)} flux pour catégorie '{supabase_cat}'")
+        return [(f['source_name'], f['feed_url']) for f in feeds]
+
+    except Exception as e:
+        print(f"⚠️ Erreur Supabase get_feeds: {str(e)}")
+        return RSS_SOURCES.get(category, RSS_SOURCES['general'])
