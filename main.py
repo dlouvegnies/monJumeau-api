@@ -1575,7 +1575,7 @@ async def fetch_rss_source(source_name: str, url: str, max_items: int = 5):
                 "author": entry.get('author', ''),
                 "source_type": "rss",
             })
-
+            print(f"   {'✅' if articles else '⚠️ '} {source_name} → {len(articles)} articles | {url[:60]}")
         return articles
 
     except asyncio.TimeoutError:
@@ -1909,6 +1909,9 @@ async def get_feeds_from_supabase(category: str, limit: int = 15, region: str = 
             return RSS_SOURCES.get(category, RSS_SOURCES['general'])
 
         print(f"📡 Supabase: {len(feeds)} flux pour catégorie '{supabase_cat}'")
+        for f in feeds:
+            print(f"   → {f['source_name']} | {f['feed_url']}")
+
         return [(f['source_name'], f['feed_url']) for f in feeds]
 
     except Exception as e:
