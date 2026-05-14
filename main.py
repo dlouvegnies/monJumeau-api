@@ -1677,11 +1677,20 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
         # ── 4. Trier par date ──
         def sort_key(a):
             try:
-                return datetime.fromisoformat(
-                    a.get('published_at', '').replace('Z', '+00:00')
-                )
+                date_str = a.get('published_at', '')
+                if not date_str:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                
+                # Normaliser la date
+                date_str = date_str.replace('Z', '+00:00')
+                dt = datetime.fromisoformat(date_str)
+                
+                # Forcer timezone UTC si absent
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
             except:
-                return datetime.min
+                return datetime.min.replace(tzinfo=timezone.utc)
 
         unique.sort(key=sort_key, reverse=True)
 
@@ -1905,3 +1914,6 @@ async def get_feeds_from_supabase(category: str, limit: int = 15, region: str = 
     except Exception as e:
         print(f"⚠️ Erreur Supabase get_feeds: {str(e)}")
         return RSS_SOURCES.get(category, RSS_SOURCES['general'])
+    
+
+
