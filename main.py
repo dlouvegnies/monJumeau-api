@@ -13,6 +13,7 @@ import re
 import feedparser
 from email.utils import parsedate_to_datetime
 import asyncio
+import html
 
 app = FastAPI()
 
@@ -1545,12 +1546,16 @@ def parse_date(entry):
     return datetime.now().isoformat()
 
 def clean_html(text):
-    """Supprime les balises HTML d'un texte"""
+    """Supprime les balises HTML et décode les entités"""
     if not text:
         return ''
-    clean = re.sub(r'<[^>]+>', '', text)
-    clean = re.sub(r'\s+', ' ', clean).strip()
-    return clean[:300] if len(clean) > 300 else clean
+    # Décoder les entités HTML (&amp; &#8217; &nbsp; etc.)
+    text = html.unescape(text)
+    # Supprimer les balises HTML
+    text = re.sub(r'<[^>]+>', '', text)
+    # Nettoyer les espaces multiples
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:300] if len(text) > 300 else text
 
 async def fetch_rss_source(source_name: str, url: str, max_items: int = 5):
     """Fetch un flux RSS et retourne les articles.
