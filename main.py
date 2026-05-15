@@ -1797,7 +1797,7 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
             fetch_rss_source(name, url, max_items=4)
             for name, url in unique_feeds_to_fetch  # ← unique_feeds_to_fetch
         ]
-        
+
         rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
         for result in rss_results:
             if isinstance(result, list):
@@ -1942,12 +1942,12 @@ async def get_feeds_from_supabase(
     locations: list = [],
     langues: list = [],  # ← langues de l'utilisateur
 ):
-    # Déterminer les pays autorisés
+    # Ajouter selon les langues
     LANGUE_TO_PAYS = {
-        'anglais':   'ang',
-        'italien':   'ita',
-        'espagnol':  'esp',
-        'breton':    'bre',
+        'anglais':  'ang',
+        'italien':  'ita',
+        'espagnol': 'esp',
+        'suisse':   'sui',
     }
 
     # Par défaut : uniquement français
@@ -1980,6 +1980,7 @@ async def get_feeds_from_supabase(
                     "is_youtube": "eq.false",
                     "categorie": f"eq.{CAT_MAP.get(category, 'presse')}",
                     "pays_code": pays_filter,  # ← filtre pays
+                    "or": f"(sous_categorie.ilike.%{interest}%,groupe.ilike.%{interest}%,...)",
                     "limit": str(limit),
                 },
                 timeout=10.0,
