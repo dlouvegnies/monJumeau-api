@@ -14,6 +14,7 @@ import feedparser
 from email.utils import parsedate_to_datetime
 import asyncio
 import html
+from urllib.parse import urlparse
 
 app = FastAPI()
 
@@ -69,6 +70,17 @@ CAT_MAP = {
     'health':        'culture',
     'local':         'local',
 }
+
+# Domaines étrangers à exclure par défaut
+EXCLUDED_DOMAINS = [
+    '20min.ch',      # Suisse
+    'rts.ch',        # Suisse
+    'rtbf.be',       # Belgique
+    'lesoir.be',     # Belgique
+    'rtl.lu',        # Luxembourg
+    'bsky.app',      # Bluesky (pas vraiment des news)
+    'flipboard.com', # Agrégateur
+]
 
 spotify_token = None
 spotify_token_expiry = 0
@@ -1941,13 +1953,16 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
         return {"articles": []}
     
 
+def is_excluded_url(url):
+    return any(domain in url for domain in EXCLUDED_DOMAINS)
+
+
 async def get_feeds_from_supabase(
     category: str, limit: int = 15,
     interests: list = [],
     locations: list = [],
-    langues: list = [],  # ← langues de l'utilisateur
-):
-    # Ajouter selon les langues
+    langues: list = [],
+    ):
     LANGUE_TO_PAYS = {
         'anglais':  'ang',
         'italien':  'ita',
@@ -1956,7 +1971,7 @@ async def get_feeds_from_supabase(
     }
 
     # Par défaut : uniquement français
-    pays_autorises = ['fra', 'cor', 'bre']  # France + Corse + Bretagne
+    pays_autorises = ['fra', 'cor', 'bre']
 
     # Ajouter les pays selon les langues de l'utilisateur
     for langue in langues:
@@ -1968,41 +1983,41 @@ async def get_feeds_from_supabase(
     pays_filter = f"in.({','.join(pays_autorises)})"
     print(f"🌍 Pays autorisés: {pays_autorises}")
 
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+
     try:
         all_feeds = []
 
-        # Flux par catégorie principale
+        # ── 1. Flux par catégorie principale ──
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/rss_feeds",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                },
+                headers=headers,
                 params={
                     "select": "source_name,feed_url",
                     "is_active": "eq.true",
                     "is_youtube": "eq.false",
                     "categorie": f"eq.{CAT_MAP.get(category, 'presse')}",
-                    "pays_code": pays_filter,  # ← filtre pays
+                    "pays_code": pays_filter,
                     "limit": str(limit),
                 },
                 timeout=10.0,
             )
         feeds = r.json()
         if isinstance(feeds, list):
+            feeds = [f for f in feeds if not is_excluded_url(f.get('feed_url', ''))]
             all_feeds.extend([(f['source_name'], f['feed_url']) for f in feeds])
+            print(f"📂 Catégorie '{category}': {len(feeds)} flux")
 
-        # Flux par centres d'intérêt — cherche dans plusieurs colonnes
+        # ── 2. Flux par centres d'intérêt ──
         for interest in interests[:3]:
-            # Requête 1 — sous_categorie
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     f"{SUPABASE_URL}/rest/v1/rss_feeds",
-                    headers={
-                        "apikey": SUPABASE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_KEY}",
-                    },
+                    headers=headers,
                     params={
                         "select": "source_name,feed_url",
                         "is_active": "eq.true",
@@ -2015,50 +2030,57 @@ async def get_feeds_from_supabase(
                 )
             interest_feeds = r.json()
             if isinstance(interest_feeds, list):
+                interest_feeds = [f for f in interest_feeds if not is_excluded_url(f.get('feed_url', ''))]
                 all_feeds.extend([(f['source_name'], f['feed_url']) for f in interest_feeds])
-                print(f"🎯 Intérêt '{interest}': {len(interest_feeds)} flux trouvés")
+                print(f"🎯 Intérêt '{interest}': {len(interest_feeds)} flux")
             else:
-                print(f"⚠️ Intérêt '{interest}': réponse inattendue {interest_feeds}")
+                print(f"⚠️ Intérêt '{interest}': réponse inattendue")
 
-        # Flux par lieux
+        # ── 3. Flux par lieux ──
         for location in locations[:3]:
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     f"{SUPABASE_URL}/rest/v1/rss_feeds",
-                    headers={
-                        "apikey": SUPABASE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_KEY}",
-                    },
+                    headers=headers,
                     params={
                         "select": "source_name,feed_url",
                         "is_active": "eq.true",
+                        "is_youtube": "eq.false",
+                        "pays_code": pays_filter,
                         "or": f"(region.ilike.%{location}%,ville.ilike.%{location}%,departement.ilike.%{location}%)",
-                        "pays_code": pays_filter,  # ← filtre pays
                         "limit": "5",
                     },
                     timeout=10.0,
                 )
             location_feeds = r.json()
             if isinstance(location_feeds, list):
+                location_feeds = [f for f in location_feeds if not is_excluded_url(f.get('feed_url', ''))]
                 all_feeds.extend([(f['source_name'], f['feed_url']) for f in location_feeds])
                 print(f"📍 Lieu '{location}': {len(location_feeds)} flux")
 
-        # Dédupliquer
-        seen = set()
+        # ── 4. Dédupliquer par URL ──
+        seen_urls = set()
         unique_feeds = []
         for name, url in all_feeds:
-            if url not in seen:
-                seen.add(url)
+            if url not in seen_urls:
+                seen_urls.add(url)
                 unique_feeds.append((name, url))
 
+        # ── 5. Diversifier — max 2 flux par domaine ──
+        domain_count = {}
+        diverse_feeds = []
+        for name, url in unique_feeds:
+            domain = urlparse(url).netloc
+            count = domain_count.get(domain, 0)
+            if count < 2:
+                diverse_feeds.append((name, url))
+                domain_count[domain] = count + 1
 
-        print(f"📡 Flux retournés par Supabase ({len(all_feeds)}):")
-        for name, url in all_feeds:
-            print(f"   → {name} | {url[:60]}")
-        
-        print(f"📡 Total flux sélectionnés: {len(unique_feeds)}")
-        return unique_feeds or RSS_SOURCES.get(category, RSS_SOURCES['general'])
+        print(f"📡 Total: {len(all_feeds)} → {len(unique_feeds)} uniques → {len(diverse_feeds)} après diversification")
+        return diverse_feeds or RSS_SOURCES.get(category, RSS_SOURCES['general'])
 
     except Exception as e:
         print(f"⚠️ Erreur Supabase: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return RSS_SOURCES.get(category, RSS_SOURCES['general'])
