@@ -1958,8 +1958,9 @@ async def get_feeds_from_supabase(
         if isinstance(feeds, list):
             all_feeds.extend([(f['source_name'], f['feed_url']) for f in feeds])
 
-        # Flux par centres d'intérêt
+        # Flux par centres d'intérêt — cherche dans plusieurs colonnes
         for interest in interests[:3]:
+            # Requête 1 — sous_categorie
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     f"{SUPABASE_URL}/rest/v1/rss_feeds",
@@ -1970,16 +1971,19 @@ async def get_feeds_from_supabase(
                     params={
                         "select": "source_name,feed_url",
                         "is_active": "eq.true",
-                        "sous_categorie": f"ilike.%{interest}%",
-                        "pays_code": pays_filter,  # ← filtre pays
-                        "limit": "5",
+                        "is_youtube": "eq.false",
+                        "pays_code": pays_filter,
+                        "or": f"(sous_categorie.ilike.%{interest}%,groupe.ilike.%{interest}%,sous_groupe.ilike.%{interest}%,base_subject.ilike.%{interest}%,source_name.ilike.%{interest}%)",
+                        "limit": "10",
                     },
                     timeout=10.0,
                 )
             interest_feeds = r.json()
             if isinstance(interest_feeds, list):
                 all_feeds.extend([(f['source_name'], f['feed_url']) for f in interest_feeds])
-                print(f"🎯 Intérêt '{interest}': {len(interest_feeds)} flux")
+                print(f"🎯 Intérêt '{interest}': {len(interest_feeds)} flux trouvés")
+            else:
+                print(f"⚠️ Intérêt '{interest}': réponse inattendue {interest_feeds}")
 
         # Flux par lieux
         for location in locations[:3]:
