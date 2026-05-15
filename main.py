@@ -272,6 +272,7 @@ class PersonalizedNewsRequest(BaseModel):
     feedback: dict = {}  # ← ajoute ça
     interests: list = []   # ← ajoute ça
     locations: list = []   # ← ajoute ça
+    langues: list = []  # ← ajoute ça
 
 
 
@@ -1728,6 +1729,7 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
             limit=20,
             interests=req.interests,
             locations=req.locations,
+            langues=req.langues,  # ← ajoute ça
         )    
 
 
@@ -1875,28 +1877,35 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
 
 async def get_feeds_from_supabase(
     category: str, limit: int = 15,
-    region: str = None,
     interests: list = [],
-    locations: list = []
+    locations: list = [],
+    langues: list = [],  # ← langues de l'utilisateur
 ):
+    # Déterminer les pays autorisés
+    LANGUE_TO_PAYS = {
+        'anglais':   'ang',
+        'italien':   'ita',
+        'espagnol':  'esp',
+        'breton':    'bre',
+    }
+
+    # Par défaut : uniquement français
+    pays_autorises = ['fra', 'cor', 'bre']  # France + Corse + Bretagne
+
+    # Ajouter les pays selon les langues de l'utilisateur
+    for langue in langues:
+        pays = LANGUE_TO_PAYS.get(langue.lower())
+        if pays and pays not in pays_autorises:
+            pays_autorises.append(pays)
+            print(f"🌍 Langue '{langue}' → pays '{pays}' ajouté")
+
+    pays_filter = f"in.({','.join(pays_autorises)})"
+    print(f"🌍 Pays autorisés: {pays_autorises}")
+
     try:
         all_feeds = []
 
         # Flux par catégorie principale
-        params = {
-            "select": "source_name,feed_url",
-            "is_active": "eq.true",
-            "is_youtube": "eq.false",
-            "limit": str(limit),
-        }
-        cat_map = {
-            'general': 'presse', 'technology': 'technologie',
-            'science': 'culture', 'business': 'économie',
-            'entertainment': 'culture', 'sports': 'sport',
-            'health': 'culture', 'local': 'local',
-        }
-        params["categorie"] = f"eq.{cat_map.get(category, 'presse')}"
-
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/rss_feeds",
@@ -1904,14 +1913,21 @@ async def get_feeds_from_supabase(
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}",
                 },
-                params=params,
+                params={
+                    "select": "source_name,feed_url",
+                    "is_active": "eq.true",
+                    "is_youtube": "eq.false",
+                    "categorie": f"eq.{CAT_MAP.get(category, 'presse')}",
+                    "pays_code": pays_filter,  # ← filtre pays
+                    "limit": str(limit),
+                },
                 timeout=10.0,
             )
         feeds = r.json()
         if isinstance(feeds, list):
             all_feeds.extend([(f['source_name'], f['feed_url']) for f in feeds])
 
-        # Flux par centres d'intérêt → sous_categorie
+        # Flux par centres d'intérêt
         for interest in interests[:3]:
             async with httpx.AsyncClient() as client:
                 r = await client.get(
@@ -1924,6 +1940,7 @@ async def get_feeds_from_supabase(
                         "select": "source_name,feed_url",
                         "is_active": "eq.true",
                         "sous_categorie": f"ilike.%{interest}%",
+                        "pays_code": pays_filter,  # ← filtre pays
                         "limit": "5",
                     },
                     timeout=10.0,
@@ -1933,7 +1950,7 @@ async def get_feeds_from_supabase(
                 all_feeds.extend([(f['source_name'], f['feed_url']) for f in interest_feeds])
                 print(f"🎯 Intérêt '{interest}': {len(interest_feeds)} flux")
 
-        # Flux par lieux → region ou ville
+        # Flux par lieux
         for location in locations[:3]:
             async with httpx.AsyncClient() as client:
                 r = await client.get(
@@ -1946,6 +1963,7 @@ async def get_feeds_from_supabase(
                         "select": "source_name,feed_url",
                         "is_active": "eq.true",
                         "or": f"(region.ilike.%{location}%,ville.ilike.%{location}%,departement.ilike.%{location}%)",
+                        "pays_code": pays_filter,  # ← filtre pays
                         "limit": "5",
                     },
                     timeout=10.0,
@@ -1955,7 +1973,7 @@ async def get_feeds_from_supabase(
                 all_feeds.extend([(f['source_name'], f['feed_url']) for f in location_feeds])
                 print(f"📍 Lieu '{location}': {len(location_feeds)} flux")
 
-        # Dédupliquer par URL
+        # Dédupliquer
         seen = set()
         unique_feeds = []
         for name, url in all_feeds:
@@ -1967,5 +1985,5 @@ async def get_feeds_from_supabase(
         return unique_feeds or RSS_SOURCES.get(category, RSS_SOURCES['general'])
 
     except Exception as e:
-        print(f"⚠️ Erreur Supabase get_feeds: {str(e)}")
+        print(f"⚠️ Erreur Supabase: {str(e)}")
         return RSS_SOURCES.get(category, RSS_SOURCES['general'])
