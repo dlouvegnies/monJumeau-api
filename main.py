@@ -1470,24 +1470,29 @@ async def get_news_old(req: NewsRequest, x_app_secret: str = Header(None)):
     
 
 
-
 def extract_image_from_entry(entry):
-    """Extrait l'image d'un article RSS"""
+    """Extrait l'image d'un article RSS — tous formats"""
+
     # Media content
     if hasattr(entry, 'media_content') and entry.media_content:
         for media in entry.media_content:
-            if media.get('medium') == 'image' or 'image' in media.get('type', ''):
-                return media.get('url')
+            url = media.get('url', '')
+            if url and ('image' in media.get('type', '') or
+                        media.get('medium') == 'image' or
+                        url.endswith(('.jpg', '.jpeg', '.png', '.webp'))):
+                return url
 
     # Media thumbnail
     if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
-        return entry.media_thumbnail[0].get('url')
+        url = entry.media_thumbnail[0].get('url', '')
+        if url:
+            return url
 
     # Enclosures
     if hasattr(entry, 'enclosures') and entry.enclosures:
         for enc in entry.enclosures:
             if 'image' in enc.get('type', ''):
-                return enc.get('href')
+                return enc.get('href') or enc.get('url')
 
     # Image dans le contenu HTML
     content = ''
@@ -1495,14 +1500,35 @@ def extract_image_from_entry(entry):
         content = entry.content[0].get('value', '')
     elif hasattr(entry, 'summary'):
         content = entry.summary or ''
+    elif hasattr(entry, 'description'):
+        content = entry.description or ''
 
-    img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', content)
+    # Chercher img src dans le HTML
+    img_match = re.search(
+        r'<img[^>]+src=["\']([^"\']+\.(jpg|jpeg|png|webp|gif))["\']',
+        content, re.IGNORECASE
+    )
     if img_match:
         url = img_match.group(1)
         if url.startswith('http'):
             return url
 
+    # Balise image RSS standard
+    if hasattr(entry, 'image') and entry.image:
+        url = entry.image.get('href') or entry.image.get('url', '')
+        if url:
+            return url
+
+    # Links avec type image
+    if hasattr(entry, 'links'):
+        for link in entry.links:
+            if 'image' in link.get('type', ''):
+                return link.get('href')
+
     return None
+
+
+
 
 def parse_date(entry):
     """Parse la date d'un article RSS"""
