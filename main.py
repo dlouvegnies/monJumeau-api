@@ -1980,7 +1980,6 @@ async def get_feeds_from_supabase(
                     "is_youtube": "eq.false",
                     "categorie": f"eq.{CAT_MAP.get(category, 'presse')}",
                     "pays_code": pays_filter,  # ← filtre pays
-                    "or": f"(sous_categorie.ilike.%{interest}%,groupe.ilike.%{interest}%,...)",
                     "limit": str(limit),
                 },
                 timeout=10.0,
