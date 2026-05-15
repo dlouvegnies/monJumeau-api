@@ -59,6 +59,16 @@ NEWS_API_URL = "https://newsapi.org/v2"
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+CAT_MAP = {
+    'general':       'presse',
+    'technology':    'technologie',
+    'science':       'culture',
+    'business':      'économie',
+    'entertainment': 'culture',
+    'sports':        'sport',
+    'health':        'culture',
+    'local':         'local',
+}
 
 spotify_token = None
 spotify_token_expiry = 0
@@ -1657,10 +1667,21 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
             limit=15,
         )
 
+        # ← AJOUTE ICI
+        seen_urls = set()
+        unique_feeds_to_fetch = []
+        for name, url in rss_sources:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                unique_feeds_to_fetch.append((name, url))
+        print(f"📡 {len(unique_feeds_to_fetch)} flux uniques à fetcher")
+
+        # Remplace rss_sources par unique_feeds_to_fetch
         rss_tasks = [
             fetch_rss_source(name, url, max_items=4)
-            for name, url in rss_sources
+            for name, url in unique_feeds_to_fetch  # ← unique_feeds_to_fetch
         ]
+
         rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
         for result in rss_results:
             if isinstance(result, list):
@@ -1763,11 +1784,20 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
             langues=req.langues,  # ← ajoute ça
         )    
 
+        # ← AJOUTE ICI
+        seen_urls = set()
+        unique_feeds_to_fetch = []
+        for name, url in rss_sources:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                unique_feeds_to_fetch.append((name, url))
+        print(f"📡 {len(unique_feeds_to_fetch)} flux uniques à fetcher")
 
         rss_tasks = [
-            fetch_rss_source(name, url, max_items=5)
-            for name, url in rss_sources
+            fetch_rss_source(name, url, max_items=4)
+            for name, url in unique_feeds_to_fetch  # ← unique_feeds_to_fetch
         ]
+        
         rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
         for result in rss_results:
             if isinstance(result, list):
