@@ -424,6 +424,58 @@ async def get_feeds_from_supabase(
     locations: list = [],
     langues: list = [],
 ):
+    
+    # Flux "une" garantis des grands médias français
+    FLAGSHIP_FEEDS = {
+        'general': [
+            ('Le Monde', 'https://www.lemonde.fr/rss/une.xml'),
+            ('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
+            ('Le Parisien', 'https://feeds.leparisien.fr/leparisien/rss'),
+            ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
+            ('France Inter', 'https://www.radiofrance.fr/franceinter/rss'),
+            ('BFM TV', 'https://www.bfmtv.com/rss/info/flux-rss/toutes-les-actualites/'),
+            ('L\'Express', 'https://www.lexpress.fr/arc/outboundfeeds/rss/'),
+            ('Le Point', 'https://www.lepoint.fr/rss.xml'),
+            ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
+            ('20 Minutes', 'https://www.20minutes.fr/feeds/rss-une.xml'),
+        ],
+        'technology': [
+            ('01net', 'https://www.01net.com/actualites/feed/'),
+            ('Numerama', 'https://www.numerama.com/feed/'),
+            ('Frandroid', 'https://www.frandroid.com/feed'),
+            ('Korben', 'https://korben.info/feed'),
+            ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
+        ],
+        'science': [
+            ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
+            ('Futura Sciences', 'https://www.futura-sciences.com/rss/actualites.rss'),
+            ('Science Post', 'https://sciencepost.fr/feed/'),
+        ],
+        'business': [
+            ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
+            ('Le Point Economie', 'https://www.lepoint.fr/economie/rss.xml'),
+            ('BFM Business', 'https://www.bfmtv.com/rss/economie/'),
+            ('Challenges', 'https://www.challenges.fr/rss.xml'),
+            ('La Tribune', 'https://www.latribune.fr/rss/une.xml'),
+        ],
+        'entertainment': [
+            ('Allociné', 'https://www.allocine.fr/rss/news.xml'),
+            ('Première', 'http://www.premiere.fr/rss/actu-live'),
+            ('Télérama', 'https://www.telerama.fr/rss/latest-articles.xml'),
+        ],
+        'sports': [
+            ("L'Equipe", 'https://dwh.lequipe.fr/api/edito/rss?path=/'),
+            ('RMC Sport', 'https://rmcsport.bfmtv.com/rss/football/'),
+            ('Eurosport', 'https://www.eurosport.fr/rss.xml'),
+        ],
+        'health': [
+            ('Pourquoi Docteur', 'https://www.pourquoidocteur.fr/rss.xml'),
+            ('Top Santé', 'https://www.topsante.com/rss.xml'),
+            ('Santé Magazine', 'https://www.santemagazine.fr/feed'),
+        ],
+    }
+
+
     LANGUE_TO_PAYS = {
         'anglais':  'ang',
         'italien':  'ita',
@@ -448,6 +500,12 @@ async def get_feeds_from_supabase(
 
     try:
         all_feeds = []
+
+        # ── 0. Flagship feeds — toujours en premier ──
+        flagship = FLAGSHIP_FEEDS.get(category, FLAGSHIP_FEEDS['general'])
+        all_feeds.extend(flagship)
+        print(f"🏆 Flagship feeds: {len(flagship)} flux")
+
 
         # ── 1. Flux par catégorie — via fonction SQL get_random_feeds ──
         async with httpx.AsyncClient() as client:
