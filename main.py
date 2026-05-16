@@ -1507,7 +1507,7 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
         # ── 4. Préparer résumé pour Claude ──
         articles_summary = "\n".join([
             f"{i+1}. [{a.get('source', '?')}] {a.get('title', '')} — {(a.get('description', '') or '')[:100]}"
-            for i, a in enumerate(unique[:25])
+            for i, a in enumerate(unique[:55])
         ])
 
         # ── 5. Construire profil ──
@@ -1537,7 +1537,7 @@ PROFIL :
 {feedback_str}
 ARTICLES DISPONIBLES :
 {articles_summary}
-Sélectionne les 5 articles les plus pertinents et explique pourquoi en 1 phrase.
+Sélectionne les 10 articles les plus pertinents et explique pourquoi en 1 phrase.
 Retourne UNIQUEMENT ce JSON valide :
 {{
   "selected": [
