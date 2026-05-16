@@ -257,14 +257,14 @@ class NewsRequest(BaseModel):
     category: str = 'general'
     keywords: str = ''
     language: str = 'fr'
-    page_size: int = 15
+    page_size: int = 30
 
 class PersonalizedNewsRequest(BaseModel):
     profile_traits: list = []
     personality: dict = {}
     context: dict = {}
     category: str = 'general'
-    page_size: int = 15
+    page_size: int = 30
     feedback: dict = {}
     interests: list = []
     locations: list = []
@@ -430,13 +430,14 @@ async def get_feeds_from_supabase(
         'general': [
             ('Le Monde', 'https://www.lemonde.fr/rss/une.xml'),
             ('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
-            ('Le Parisien', 'https://feeds.leparisien.fr/leparisien/rss'),
+            ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
             ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
+            # Bonus — toujours bienvenus
+            ('Le Parisien', 'https://feeds.leparisien.fr/leparisien/rss'),
             ('France Inter', 'https://www.radiofrance.fr/franceinter/rss'),
             ('BFM TV', 'https://www.bfmtv.com/rss/info/flux-rss/toutes-les-actualites/'),
             ('L\'Express', 'https://www.lexpress.fr/arc/outboundfeeds/rss/'),
             ('Le Point', 'https://www.lepoint.fr/rss.xml'),
-            ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
             ('20 Minutes', 'https://www.20minutes.fr/feeds/rss-une.xml'),
         ],
         'technology': [
