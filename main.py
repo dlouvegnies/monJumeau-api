@@ -461,6 +461,10 @@ async def get_feeds_from_supabase(
                 },
                 timeout=10.0,
             )
+
+        print(f"🔍 Status Supabase RPC: {r.status_code}")
+        print(f"🔍 Réponse brute: {r.text[:300]}")
+
         feeds = r.json()
         if isinstance(feeds, list):
             feeds = [f for f in feeds if not is_excluded_url(f.get('feed_url', ''))]
