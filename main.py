@@ -124,6 +124,60 @@ RSS_SOURCES = {
     ],
 }
 
+
+# Flux "une" garantis des grands médias français
+FLAGSHIP_FEEDS = {
+    'general': [
+        ('Le Monde', 'https://www.lemonde.fr/rss/une.xml'),
+        ('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
+        ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
+        ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
+        # Bonus — toujours bienvenus
+        ('Le Parisien', 'https://feeds.leparisien.fr/leparisien/rss'),
+        ('France Inter', 'https://www.radiofrance.fr/franceinter/rss'),
+        ('BFM TV', 'https://www.bfmtv.com/rss/info/flux-rss/toutes-les-actualites/'),
+        ('L\'Express', 'https://www.lexpress.fr/arc/outboundfeeds/rss/'),
+        ('Le Point', 'https://www.lepoint.fr/rss.xml'),
+        ('20 Minutes', 'https://www.20minutes.fr/feeds/rss-une.xml'),
+    ],
+    'technology': [
+        ('01net', 'https://www.01net.com/actualites/feed/'),
+        ('Numerama', 'https://www.numerama.com/feed/'),
+        ('Frandroid', 'https://www.frandroid.com/feed'),
+        ('Korben', 'https://korben.info/feed'),
+        ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
+    ],
+    'science': [
+        ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
+        ('Futura Sciences', 'https://www.futura-sciences.com/rss/actualites.rss'),
+        ('Science Post', 'https://sciencepost.fr/feed/'),
+    ],
+    'business': [
+        ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
+        ('Le Point Economie', 'https://www.lepoint.fr/economie/rss.xml'),
+        ('BFM Business', 'https://www.bfmtv.com/rss/economie/'),
+        ('Challenges', 'https://www.challenges.fr/rss.xml'),
+        ('La Tribune', 'https://www.latribune.fr/rss/une.xml'),
+    ],
+    'entertainment': [
+        ('Allociné', 'https://www.allocine.fr/rss/news.xml'),
+        ('Première', 'http://www.premiere.fr/rss/actu-live'),
+        ('Télérama', 'https://www.telerama.fr/rss/latest-articles.xml'),
+    ],
+    'sports': [
+        ("L'Equipe", 'https://dwh.lequipe.fr/api/edito/rss?path=/'),
+        ('RMC Sport', 'https://rmcsport.bfmtv.com/rss/football/'),
+        ('Eurosport', 'https://www.eurosport.fr/rss.xml'),
+    ],
+    'health': [
+        ('Pourquoi Docteur', 'https://www.pourquoidocteur.fr/rss.xml'),
+        ('Top Santé', 'https://www.topsante.com/rss.xml'),
+        ('Santé Magazine', 'https://www.santemagazine.fr/feed'),
+    ],
+}
+
+
+
 spotify_token = None
 spotify_token_expiry = 0
 ft_token = None
@@ -425,57 +479,7 @@ async def get_feeds_from_supabase_origine(
     langues: list = [],
 ):
     
-    # Flux "une" garantis des grands médias français
-    FLAGSHIP_FEEDS = {
-        'general': [
-            ('Le Monde', 'https://www.lemonde.fr/rss/une.xml'),
-            ('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
-            ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
-            ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
-            # Bonus — toujours bienvenus
-            ('Le Parisien', 'https://feeds.leparisien.fr/leparisien/rss'),
-            ('France Inter', 'https://www.radiofrance.fr/franceinter/rss'),
-            ('BFM TV', 'https://www.bfmtv.com/rss/info/flux-rss/toutes-les-actualites/'),
-            ('L\'Express', 'https://www.lexpress.fr/arc/outboundfeeds/rss/'),
-            ('Le Point', 'https://www.lepoint.fr/rss.xml'),
-            ('20 Minutes', 'https://www.20minutes.fr/feeds/rss-une.xml'),
-        ],
-        'technology': [
-            ('01net', 'https://www.01net.com/actualites/feed/'),
-            ('Numerama', 'https://www.numerama.com/feed/'),
-            ('Frandroid', 'https://www.frandroid.com/feed'),
-            ('Korben', 'https://korben.info/feed'),
-            ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
-        ],
-        'science': [
-            ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
-            ('Futura Sciences', 'https://www.futura-sciences.com/rss/actualites.rss'),
-            ('Science Post', 'https://sciencepost.fr/feed/'),
-        ],
-        'business': [
-            ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
-            ('Le Point Economie', 'https://www.lepoint.fr/economie/rss.xml'),
-            ('BFM Business', 'https://www.bfmtv.com/rss/economie/'),
-            ('Challenges', 'https://www.challenges.fr/rss.xml'),
-            ('La Tribune', 'https://www.latribune.fr/rss/une.xml'),
-        ],
-        'entertainment': [
-            ('Allociné', 'https://www.allocine.fr/rss/news.xml'),
-            ('Première', 'http://www.premiere.fr/rss/actu-live'),
-            ('Télérama', 'https://www.telerama.fr/rss/latest-articles.xml'),
-        ],
-        'sports': [
-            ("L'Equipe", 'https://dwh.lequipe.fr/api/edito/rss?path=/'),
-            ('RMC Sport', 'https://rmcsport.bfmtv.com/rss/football/'),
-            ('Eurosport', 'https://www.eurosport.fr/rss.xml'),
-        ],
-        'health': [
-            ('Pourquoi Docteur', 'https://www.pourquoidocteur.fr/rss.xml'),
-            ('Top Santé', 'https://www.topsante.com/rss.xml'),
-            ('Santé Magazine', 'https://www.santemagazine.fr/feed'),
-        ],
-    }
-
+    
 
     LANGUE_TO_PAYS = {
         'anglais':  'ang',
@@ -1687,4 +1691,44 @@ Retourne UNIQUEMENT ce JSON valide :
         print(f"❌ ERREUR personalized news: {str(e)}")
         import traceback
         traceback.print_exc()
+        return {"articles": []}
+    
+
+@app.post("/news/flagship")
+async def get_flagship_news(req: NewsRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    try:
+        print(f"🏆 Flagship news request")
+
+        # Fetcher tous les flagship feeds en parallèle
+        flagship = FLAGSHIP_FEEDS.get('general', [])
+        rss_tasks = [
+            fetch_rss_source(name, url, max_items=5)
+            for name, url in flagship
+        ]
+        rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
+
+        all_articles = []
+        for result in rss_results:
+            if isinstance(result, list):
+                all_articles.extend(result)
+
+        # Dédupliquer par titre
+        unique = deduplicate_articles(all_articles)
+
+        # Trier : avec image en premier, sans image à la fin
+        with_image = [a for a in unique if a.get('image_url')]
+        without_image = [a for a in unique if not a.get('image_url')]
+
+        # Trier chaque groupe par date
+        with_image = sort_by_date(with_image)
+        without_image = sort_by_date(without_image)
+
+        final = with_image + without_image
+
+        print(f"✅ Flagship: {len(with_image)} avec image, {len(without_image)} sans image")
+        return {"articles": final}
+
+    except Exception as e:
+        print(f"❌ ERREUR flagship news: {str(e)}")
         return {"articles": []}
