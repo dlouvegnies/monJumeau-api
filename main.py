@@ -1630,7 +1630,7 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
     
 
 
-    
+
 
 @app.post("/news/personalized")
 async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None)):
@@ -1883,6 +1883,11 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         except:
             pass
 
+        # ← AJOUTE ICI
+        print(f"📡 Flux utilisés pour '{category}' ({len(rss_sources[:15])}):")
+        for name, url in rss_sources[:15]:
+            print(f"   → {name}")    
+
         # Fetch RSS
         rss_results = await asyncio.gather(*[
             fetch_rss_source(name, url, max_items=5)
@@ -1971,6 +1976,7 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         print(f"   ✅ {category}: {stored} nouveaux articles vectorisés")
         last_embed_time[category] = datetime.now(timezone.utc)
 
+
     # Nettoyer les vieux articles
     try:
         async with httpx.AsyncClient() as client:
@@ -2002,9 +2008,6 @@ async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
     except Exception as e:
         print(f"❌ ERREUR embed_news: {str(e)}")
         return {"success": False, "error": str(e)}
-
-
-
 
 
 
