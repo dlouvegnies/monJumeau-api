@@ -58,6 +58,7 @@ CAT_MAP = {
     'sports':        'sport',
     'health':        'culture',
     'local':         'local',
+    'politics':      'politique',  # ← ajoute ça
 }
 
 CATEGORY_KEYWORDS = {
@@ -68,6 +69,8 @@ CATEGORY_KEYWORDS = {
     'entertainment': 'cinéma culture musique',
     'sports': 'sport football tennis',
     'health': 'santé médecine bien-être',
+    'politics':      'politique france gouvernement assemblée',  # ← ajoute ça
+
 }
 
 EXCLUDED_DOMAINS = [
@@ -175,6 +178,18 @@ FLAGSHIP_FEEDS = {
             ('Top Santé', 'https://www.topsante.com/rss.xml'),
             ('Santé Magazine', 'https://www.santemagazine.fr/feed'),
         ],
+        'politics': [  # ← ajoute ça
+            ('Le Monde Politique', 'https://www.lemonde.fr/politique/rss_full.xml'),
+            ('France Info Politique', 'https://www.francetvinfo.fr/politique.rss'),
+            ('Le Point Politique', 'https://www.lepoint.fr/politique/rss.xml'),
+            ('L\'Express Politique', 'https://www.lexpress.fr/arc/outboundfeeds/rss/rubriques/politique.xml'),
+            ('Libération Politique', 'https://www.liberation.fr/arc/outboundfeeds/rss/category/politique/'),
+            ('France Inter Politique', 'https://www.radiofrance.fr/franceinter/podcasts/le-telephone-sonne/rss'),
+            ('Le NouvelObs Politique', 'https://www.nouvelobs.com/politique/rss.xml'),
+            ('BFM Politique', 'https://www.bfmtv.com/rss/politique/'),
+            ('20 Minutes Politique', 'https://www.20minutes.fr/feeds/rss-politique.xml'),
+            ('Mediapart', 'https://www.mediapart.fr/articles/feed'),
+         ],
     }
 
 
