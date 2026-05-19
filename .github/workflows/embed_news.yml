@@ -1,0 +1,18 @@
+name: Embed News Hourly
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # toutes les heures
+  workflow_dispatch:       # déclenchement manuel possible
+
+jobs:
+  embed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger news embedding
+        run: |
+          curl -X POST https://monjumeau-api.onrender.com/news/embed \
+            -H "Content-Type: application/json" \
+            -H "x-app-secret: ${{ secrets.APP_SECRET }}" \
+            -d '{"categories": ["general", "technology", "business", "entertainment", "sports", "health", "science", "politics"], "hours_back": 2}' \
+            --max-time 300
