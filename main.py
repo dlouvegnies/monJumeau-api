@@ -353,7 +353,7 @@ class EmbedNewsRequest(BaseModel):
     categories: list = ['general', 'technology', 'business',
                         'entertainment', 'sports', 'health',
                         'science', 'politics']
-    hours_back: int = 24  # Ne re-vectorise que les X dernières heures
+    hours_back: int = 2  # Ne re-vectorise que les X dernières heures
 
 
 class SemanticNewsRequest(BaseModel):
