@@ -1778,7 +1778,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
                 },
                 json={
                     "model": MISTRAL_EMBED_MODEL,
-                    "inputs": texts,
+                    "input": texts,
                     "encoding_format": "float",
                 },
                 timeout=30.0,
