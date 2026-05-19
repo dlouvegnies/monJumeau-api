@@ -2106,10 +2106,36 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
         }
         print(f"   🚫 Filtrage disliked: {time.time()-t_filter:.2f}s")
 
-        # ── 5. Trier par score final ──
+      # ── 5. Trier par score final + date ──
+
+        # Normaliser les scores entre 0 et 1
+        max_score = max((d["score"] for d in filtered.values()), default=1)
+        min_score = min((d["score"] for d in filtered.values()), default=0)
+        score_range = max_score - min_score or 1
+
+        now = datetime.now(timezone.utc)
+
+        for url, data in filtered.items():
+            # Score normalisé 0-1
+            normalized_score = (data["score"] - min_score) / score_range
+
+            # Score temporel 0-1 (article de moins de 48h = proche de 1)
+            try:
+                pub_str = str(data["article"].get("published_at", ""))
+                pub_date = datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
+                if pub_date.tzinfo is None:
+                    pub_date = pub_date.replace(tzinfo=timezone.utc)
+                age_hours = (now - pub_date).total_seconds() / 3600
+                time_score = max(0, 1 - (age_hours / 48))  # décroît sur 48h
+            except:
+                time_score = 0
+
+            # Score final combiné — 60% similarité, 40% fraîcheur
+            data["final_score"] = normalized_score * 0.60 + time_score * 0.40
+
         sorted_articles = sorted(
             filtered.values(),
-            key=lambda x: x["score"],
+            key=lambda x: x["final_score"],
             reverse=True
         )[:req.limit]
 
@@ -2125,7 +2151,7 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
                 "image_url": a.get("image_url"),
                 "published_at": str(a.get("published_at", "")),
                 "category": a.get("category"),
-                "score": round(item["score"], 4),
+                "score": round(item["final_score"], 4),  # ← final_score
             })
 
         print(f"✅ Semantic: {len(final)} articles — TOTAL: {time.time()-t0:.2f}s")
