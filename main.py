@@ -128,7 +128,7 @@ RSS_SOURCES = {
 # Flux "une" garantis des grands médias français
 FLAGSHIP_FEEDS = {
     'general': [
-        ('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
+        ('Le Monde', 'https://www.lemonde.fr/rss/une.xml'),
     ],
     'technology': [
         ('01net', 'https://www.01net.com/actualites/feed/'),
