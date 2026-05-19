@@ -2007,25 +2007,20 @@ async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
         traceback.print_exc()
         return {"success": False, "error": str(e)}
     
-
 @app.post("/news/semantic")
 async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
     try:
+        import time
+        t0 = time.time()
         print(f"🔍 Semantic news: category={req.category}")
 
         # ── 1. Construire les textes par dimension ──
         texts = {}
-
-        # Vecteur intérêts
         if req.interests:
             texts["interests"] = ", ".join(req.interests)
-
-        # Vecteur articles aimés — signal le plus fort
         if req.liked_titles:
             texts["liked"] = " | ".join(req.liked_titles[:10])
-
-        # Vecteur profil
         profile_parts = []
         if req.profile_traits:
             profile_parts.append(f"Traits : {', '.join(req.profile_traits)}")
@@ -2037,12 +2032,10 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
             profile_parts.append(f"Valeurs : {', '.join(req.context.get('valeurs', []))}")
         if profile_parts:
             texts["profile"] = " | ".join(profile_parts)
-
-        # Si rien — fallback sur catégorie
         if not texts:
             texts["category"] = CATEGORY_KEYWORDS.get(req.category, 'actualité france')
 
-        print(f"   📝 Dimensions: {list(texts.keys())}")
+        print(f"   📝 Dimensions: {list(texts.keys())} — {time.time()-t0:.2f}s")
 
         # ── 2. Vectoriser chaque dimension ──
         WEIGHTS = {
@@ -2051,20 +2044,23 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
             "profile":   0.15,
             "category":  0.10,
         }
-
         text_list = list(texts.values())
         keys_list = list(texts.keys())
+
+        t_embed = time.time()
         embeddings = await embed_texts(text_list)
+        print(f"   🔢 Embedding Mistral: {time.time()-t_embed:.2f}s ({len(text_list)} textes)")
 
         if not embeddings:
             return {"articles": []}
 
         # ── 3. Recherche vectorielle pour chaque dimension ──
-        all_scores = {}  # url → score pondéré
+        all_scores = {}
 
+        t_search = time.time()
         for key, embedding in zip(keys_list, embeddings):
             weight = WEIGHTS.get(key, 0.1)
-
+            t_key = time.time()
             async with httpx.AsyncClient() as client:
                 r = await client.post(
                     f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
@@ -2081,13 +2077,12 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
                     },
                     timeout=10.0,
                 )
-
             results = r.json()
+            print(f"   🎯 {key} (×{weight}): {len(results) if isinstance(results, list) else 'ERR'} résultats — {time.time()-t_key:.2f}s")
+
             if not isinstance(results, list):
                 print(f"⚠️ Erreur recherche {key}: {results}")
                 continue
-
-            print(f"   🎯 {key} (×{weight}): {len(results)} résultats")
 
             for article in results:
                 url = article.get("url")
@@ -2095,21 +2090,21 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
                     continue
                 similarity = article.get("similarity", 0)
                 weighted_score = similarity * weight
-
                 if url not in all_scores:
-                    all_scores[url] = {
-                        "article": article,
-                        "score": 0,
-                    }
+                    all_scores[url] = {"article": article, "score": 0}
                 all_scores[url]["score"] += weighted_score
 
+        print(f"   🔍 Total recherches pgvector: {time.time()-t_search:.2f}s")
+
         # ── 4. Filtrer les articles non aimés ──
+        t_filter = time.time()
         disliked_lower = [t.lower() for t in req.disliked_titles]
         filtered = {
             url: data for url, data in all_scores.items()
             if not any(d in data["article"].get("title", "").lower()
                       for d in disliked_lower)
         }
+        print(f"   🚫 Filtrage disliked: {time.time()-t_filter:.2f}s")
 
         # ── 5. Trier par score final ──
         sorted_articles = sorted(
@@ -2133,7 +2128,7 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
                 "score": round(item["score"], 4),
             })
 
-        print(f"✅ Semantic: {len(final)} articles retournés")
+        print(f"✅ Semantic: {len(final)} articles — TOTAL: {time.time()-t0:.2f}s")
         return {"articles": final}
 
     except Exception as e:
