@@ -1956,8 +1956,17 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
             continue
 
         # Vectoriser
-        texts = [f"{a.get('title', '')}. {a.get('description', '') or ''}".strip()[:1000]
-                 for a in new_articles]
+        #plus riche en dessous.
+        #texts = [f"{a.get('title', '')}. {a.get('description', '') or ''}".strip()[:1000]
+        #         for a in new_articles]
+        
+        texts = [
+                f"[{a.get('source', '')}] [{a.get('category', '')}] "
+                f"{a.get('title', '')}. "
+                f"{a.get('description', '') or ''}".strip()[:1000]
+                for a in new_articles
+            ]
+
 
         all_embeddings = []
         for i in range(0, len(texts), 32):
