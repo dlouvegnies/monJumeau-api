@@ -203,6 +203,9 @@ spotify_token_expiry = 0
 ft_token = None
 ft_token_expiry = 0
 
+# ── Auto-embed tracking ──
+last_embed_time = {}  # category → datetime
+
 def verify_secret(x_app_secret: str = None):
     if APP_SECRET and x_app_secret != APP_SECRET:
         raise HTTPException(status_code=401, detail="Non autorisé")
@@ -1562,6 +1565,16 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
     try:
         print(f"🔍 News request: category={req.category}, keywords={req.keywords}")
+
+        # ── Auto-embed si > 1h depuis le dernier embed ──
+        now = datetime.now(timezone.utc)
+        last = last_embed_time.get(req.category)
+        if not last or (now - last).total_seconds() > 3600:
+            print(f"🔄 Auto-embed déclenché pour '{req.category}'")
+            asyncio.create_task(_embed_news_logic([req.category], hours_back=2))
+            last_embed_time[req.category] = now  # évite les doublons
+
+
         all_articles = []
 
         # ── 1. RSS depuis Supabase ──
@@ -1614,6 +1627,10 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
         import traceback
         traceback.print_exc()
         return {"articles": []}
+    
+
+
+    
 
 @app.post("/news/personalized")
 async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None)):
@@ -1846,167 +1863,155 @@ async def upsert_article(article: dict, embedding: list[float], category: str):
 
 
 
-@app.post("/news/embed")
-async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
-    verify_secret(x_app_secret)
-    try:
-        print(f"🚀 Début embedding news — {len(req.categories)} catégories")
-        total_embedded = 0
-        total_skipped = 0
+async def _embed_news_logic(categories: list, hours_back: int = 2):
+    """Logique d'embedding — appelable sans vérification du secret"""
+    total_embedded = 0
+    total_skipped = 0
 
-        for category in req.categories:
-            print(f"\n📂 Catégorie: {category}")
+    for category in categories:
+        print(f"🔄 Auto-embed: {category}")
+        all_articles = []
 
-            # ── 1. Fetch articles depuis RSS + NewsAPI ──
-            all_articles = []
+        # Flagship feeds
+        flagship = FLAGSHIP_FEEDS.get(category, FLAGSHIP_FEEDS.get('general', []))
+        rss_sources = deduplicate_feeds(flagship)
 
-            # Flagship feeds
-            flagship = FLAGSHIP_FEEDS.get(category, FLAGSHIP_FEEDS.get('general', []))
-            rss_sources = deduplicate_feeds(flagship)
+        # Supabase feeds
+        try:
+            supabase_feeds = await get_feeds_from_supabase(category=category, limit=10, langues=[])
+            rss_sources = deduplicate_feeds(rss_sources + supabase_feeds)
+        except:
+            pass
 
-            # Supabase feeds en complément
-            try:
-                supabase_feeds = await get_feeds_from_supabase(
-                    category=category, limit=10, langues=[]
+        # Fetch RSS
+        rss_results = await asyncio.gather(*[
+            fetch_rss_source(name, url, max_items=5)
+            for name, url in rss_sources[:15]
+        ], return_exceptions=True)
+        for result in rss_results:
+            if isinstance(result, list):
+                all_articles.extend(result)
+
+        # NewsAPI
+        try:
+            keywords = CATEGORY_KEYWORDS.get(category, 'actualité')
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{NEWS_API_URL}/everything",
+                    params={
+                        "apiKey": NEWS_API_KEY,
+                        "q": keywords,
+                        "language": "fr",
+                        "sortBy": "publishedAt",
+                        "pageSize": 10,
+                    },
+                    timeout=15.0,
                 )
-                rss_sources = deduplicate_feeds(rss_sources + supabase_feeds)
-            except:
-                pass
+            for article in response.json().get("articles", []):
+                if article.get("title") and article.get("title") != "[Removed]":
+                    all_articles.append({
+                        "title": article.get("title"),
+                        "description": article.get("description"),
+                        "url": article.get("url"),
+                        "image_url": article.get("urlToImage"),
+                        "source": article.get("source", {}).get("name"),
+                        "published_at": article.get("publishedAt"),
+                    })
+        except:
+            pass
 
-            # Fetch RSS
-            rss_results = await asyncio.gather(*[
-                fetch_rss_source(name, url, max_items=5)
-                for name, url in rss_sources[:15]  # max 15 sources
-            ], return_exceptions=True)
+        unique_articles = deduplicate_articles(all_articles)
+        if not unique_articles:
+            continue
 
-            for result in rss_results:
-                if isinstance(result, list):
-                    all_articles.extend(result)
-
-            # NewsAPI
-            try:
-                keywords = CATEGORY_KEYWORDS.get(category, 'actualité')
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(
-                        f"{NEWS_API_URL}/everything",
-                        params={
-                            "apiKey": NEWS_API_KEY,
-                            "q": keywords,
-                            "language": "fr",
-                            "sortBy": "publishedAt",
-                            "pageSize": 10,
-                        },
-                        timeout=15.0,
-                    )
-                for article in response.json().get("articles", []):
-                    if article.get("title") and article.get("title") != "[Removed]":
-                        all_articles.append({
-                            "title": article.get("title"),
-                            "description": article.get("description"),
-                            "url": article.get("url"),
-                            "image_url": article.get("urlToImage"),
-                            "source": article.get("source", {}).get("name"),
-                            "published_at": article.get("publishedAt"),
-                        })
-            except Exception as e:
-                print(f"⚠️ NewsAPI error: {str(e)[:50]}")
-
-            # Dédupliquer
-            unique_articles = deduplicate_articles(all_articles)
-            print(f"   📰 {len(unique_articles)} articles à vectoriser")
-
-            if not unique_articles:
-                continue
-
-            # ── 2. Vérifier lesquels existent déjà dans Supabase ──
-            urls = [a.get("url") for a in unique_articles if a.get("url")]
-            try:
-                async with httpx.AsyncClient() as client:
-                    r = await client.get(
-                        f"{SUPABASE_URL}/rest/v1/news_articles",
-                        headers={
-                            "apikey": SUPABASE_KEY,
-                            "Authorization": f"Bearer {SUPABASE_KEY}",
-                        },
-                        params={
-                            "select": "url",
-                            "url": f"in.({','.join([chr(34) + u + chr(34) for u in urls[:50]])})",
-                        },
-                        timeout=10.0,
-                    )
-                existing_urls = {row["url"] for row in r.json()} if isinstance(r.json(), list) else set()
-            except:
-                existing_urls = set()
-
-            # Filtrer les nouveaux articles uniquement
-            new_articles = [a for a in unique_articles if a.get("url") not in existing_urls]
-            total_skipped += len(unique_articles) - len(new_articles)
-            print(f"   ✅ {len(new_articles)} nouveaux à vectoriser, {len(unique_articles) - len(new_articles)} déjà en base")
-
-            if not new_articles:
-                continue
-
-            # ── 3. Préparer les textes à vectoriser ──
-            texts = []
-            for article in new_articles:
-                title = article.get("title", "")
-                desc = article.get("description", "") or ""
-                # Combiner titre + description pour un meilleur vecteur
-                text = f"{title}. {desc}".strip()
-                texts.append(text[:1000])  # max 1000 chars
-
-            # ── 4. Vectoriser par batch de 32 ──
-            batch_size = 32
-            all_embeddings = []
-
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                embeddings = await embed_texts(batch)
-                all_embeddings.extend(embeddings)
-                print(f"   🔢 Batch {i//batch_size + 1} : {len(embeddings)} vecteurs")
-                await asyncio.sleep(0.5)  # rate limiting
-
-            # ── 5. Stocker dans Supabase ──
-            stored = 0
-            for article, embedding in zip(new_articles, all_embeddings):
-                if embedding:
-                    await upsert_article(article, embedding, category)
-                    stored += 1
-
-            total_embedded += stored
-            print(f"   💾 {stored} articles stockés pour '{category}'")
-
-        # ── 6. Nettoyer les vieux articles (> 7 jours) ──
+        # Vérifier articles existants
+        urls = [a.get("url") for a in unique_articles if a.get("url")]
         try:
             async with httpx.AsyncClient() as client:
-                await client.delete(
+                r = await client.get(
                     f"{SUPABASE_URL}/rest/v1/news_articles",
                     headers={
                         "apikey": SUPABASE_KEY,
                         "Authorization": f"Bearer {SUPABASE_KEY}",
                     },
                     params={
-                        "published_at": "lt.NOW() - INTERVAL '7 days'",
+                        "select": "url",
+                        "url": f"in.({','.join([chr(34) + u + chr(34) for u in urls[:50]])})",
                     },
                     timeout=10.0,
                 )
-            print(f"\n🗑️ Vieux articles nettoyés (> 7 jours)")
-        except Exception as e:
-            print(f"⚠️ Erreur nettoyage: {str(e)[:50]}")
+            existing_urls = {row["url"] for row in r.json()} if isinstance(r.json(), list) else set()
+        except:
+            existing_urls = set()
 
-        print(f"\n✅ Embedding terminé : {total_embedded} nouveaux, {total_skipped} ignorés")
-        return {
-            "success": True,
-            "embedded": total_embedded,
-            "skipped": total_skipped,
-        }
+        new_articles = [a for a in unique_articles if a.get("url") not in existing_urls]
+        total_skipped += len(unique_articles) - len(new_articles)
 
+        if not new_articles:
+            continue
+
+        # Vectoriser
+        texts = [f"{a.get('title', '')}. {a.get('description', '') or ''}".strip()[:1000]
+                 for a in new_articles]
+
+        all_embeddings = []
+        for i in range(0, len(texts), 32):
+            batch = texts[i:i + 32]
+            embeddings = await embed_texts(batch)
+            all_embeddings.extend(embeddings)
+            await asyncio.sleep(0.3)
+
+        stored = 0
+        for article, embedding in zip(new_articles, all_embeddings):
+            if embedding:
+                await upsert_article(article, embedding, category)
+                stored += 1
+
+        total_embedded += stored
+        print(f"   ✅ {category}: {stored} nouveaux articles vectorisés")
+        last_embed_time[category] = datetime.now(timezone.utc)
+
+    # Nettoyer les vieux articles
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/news_articles",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                params={"published_at": "lt.NOW() - INTERVAL '7 days'"},
+                timeout=10.0,
+            )
+    except:
+        pass
+
+    return total_embedded, total_skipped
+
+
+@app.post("/news/embed")
+async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    try:
+        print(f"🚀 Embed manuel: {len(req.categories)} catégories")
+        total_embedded, total_skipped = await _embed_news_logic(
+            req.categories, req.hours_back
+        )
+        print(f"✅ Embedding terminé : {total_embedded} nouveaux, {total_skipped} ignorés")
+        return {"success": True, "embedded": total_embedded, "skipped": total_skipped}
     except Exception as e:
         print(f"❌ ERREUR embed_news: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return {"success": False, "error": str(e)}
-    
+
+
+
+
+
+
+
+
+
+
 @app.post("/news/semantic")
 async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
