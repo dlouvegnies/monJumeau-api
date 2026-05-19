@@ -196,7 +196,7 @@ FLAGSHIP_FEEDS = {
          ],
     }
 
-
+pays_autorises = ['fra', 'cor', 'bre']
 
 spotify_token = None
 spotify_token_expiry = 0
@@ -350,6 +350,19 @@ class EmbedNewsRequest(BaseModel):
                         'entertainment', 'sports', 'health',
                         'science', 'politics']
     hours_back: int = 2  # Ne re-vectorise que les X dernières heures
+
+
+class SemanticNewsRequest(BaseModel):
+    profile_traits: list = []
+    personality: dict = {}
+    context: dict = {}
+    interests: list = []
+    locations: list = []
+    liked_titles: list = []
+    disliked_titles: list = []
+    category: str = 'general'
+    limit: int = 30
+    hours_back: int = 48
 
 # ── HELPERS RSS ──
 def is_excluded_url(url):
@@ -644,6 +657,11 @@ async def get_feeds_from_supabase(
     langues: list = [],
 ):
     # ... code pays_autorises inchangé ...
+    supabase_headers = {  # ← vérifier que c'est bien là
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
 
     try:
         all_feeds = []
@@ -1849,7 +1867,7 @@ async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
             # Supabase feeds en complément
             try:
                 supabase_feeds = await get_feeds_from_supabase(
-                    category=category, limit=10
+                    category=category, limit=10, langues=[]
                 )
                 rss_sources = deduplicate_feeds(rss_sources + supabase_feeds)
             except:
@@ -1988,3 +2006,138 @@ async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
+    
+
+@app.post("/news/semantic")
+async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    try:
+        print(f"🔍 Semantic news: category={req.category}")
+
+        # ── 1. Construire les textes par dimension ──
+        texts = {}
+
+        # Vecteur intérêts
+        if req.interests:
+            texts["interests"] = ", ".join(req.interests)
+
+        # Vecteur articles aimés — signal le plus fort
+        if req.liked_titles:
+            texts["liked"] = " | ".join(req.liked_titles[:10])
+
+        # Vecteur profil
+        profile_parts = []
+        if req.profile_traits:
+            profile_parts.append(f"Traits : {', '.join(req.profile_traits)}")
+        if req.context.get('metier'):
+            profile_parts.append(f"Métier : {req.context['metier']}")
+        if req.context.get('passions'):
+            profile_parts.append(f"Passions : {', '.join(req.context.get('passions', []))}")
+        if req.context.get('valeurs'):
+            profile_parts.append(f"Valeurs : {', '.join(req.context.get('valeurs', []))}")
+        if profile_parts:
+            texts["profile"] = " | ".join(profile_parts)
+
+        # Si rien — fallback sur catégorie
+        if not texts:
+            texts["category"] = CATEGORY_KEYWORDS.get(req.category, 'actualité france')
+
+        print(f"   📝 Dimensions: {list(texts.keys())}")
+
+        # ── 2. Vectoriser chaque dimension ──
+        WEIGHTS = {
+            "liked":     0.45,
+            "interests": 0.30,
+            "profile":   0.15,
+            "category":  0.10,
+        }
+
+        text_list = list(texts.values())
+        keys_list = list(texts.keys())
+        embeddings = await embed_texts(text_list)
+
+        if not embeddings:
+            return {"articles": []}
+
+        # ── 3. Recherche vectorielle pour chaque dimension ──
+        all_scores = {}  # url → score pondéré
+
+        for key, embedding in zip(keys_list, embeddings):
+            weight = WEIGHTS.get(key, 0.1)
+
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "query_embedding": embedding,
+                        "p_category": req.category if req.category != 'general' else None,
+                        "p_limit": 50,
+                        "p_hours": req.hours_back,
+                    },
+                    timeout=10.0,
+                )
+
+            results = r.json()
+            if not isinstance(results, list):
+                print(f"⚠️ Erreur recherche {key}: {results}")
+                continue
+
+            print(f"   🎯 {key} (×{weight}): {len(results)} résultats")
+
+            for article in results:
+                url = article.get("url")
+                if not url:
+                    continue
+                similarity = article.get("similarity", 0)
+                weighted_score = similarity * weight
+
+                if url not in all_scores:
+                    all_scores[url] = {
+                        "article": article,
+                        "score": 0,
+                    }
+                all_scores[url]["score"] += weighted_score
+
+        # ── 4. Filtrer les articles non aimés ──
+        disliked_lower = [t.lower() for t in req.disliked_titles]
+        filtered = {
+            url: data for url, data in all_scores.items()
+            if not any(d in data["article"].get("title", "").lower()
+                      for d in disliked_lower)
+        }
+
+        # ── 5. Trier par score final ──
+        sorted_articles = sorted(
+            filtered.values(),
+            key=lambda x: x["score"],
+            reverse=True
+        )[:req.limit]
+
+        # ── 6. Formater le résultat ──
+        final = []
+        for item in sorted_articles:
+            a = item["article"]
+            final.append({
+                "title": a.get("title"),
+                "description": a.get("description"),
+                "url": a.get("url"),
+                "source": a.get("source"),
+                "image_url": a.get("image_url"),
+                "published_at": str(a.get("published_at", "")),
+                "category": a.get("category"),
+                "score": round(item["score"], 4),
+            })
+
+        print(f"✅ Semantic: {len(final)} articles retournés")
+        return {"articles": final}
+
+    except Exception as e:
+        print(f"❌ ERREUR semantic_news: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"articles": []}
