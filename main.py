@@ -147,6 +147,7 @@ FLAGSHIP_FEEDS = {
             ('L\'Express', 'https://www.lexpress.fr/arc/outboundfeeds/rss/'),
             ('Le Point', 'https://www.lepoint.fr/rss.xml'),
             ('20 Minutes', 'https://www.20minutes.fr/feeds/rss-une.xml'),
+            ('Ouest France', 'https://www.ouest-france.fr/rss/une'),
         ],
         'technology': [
             ('01net', 'https://www.01net.com/actualites/feed/'),
