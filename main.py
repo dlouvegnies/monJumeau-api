@@ -353,7 +353,7 @@ class EmbedNewsRequest(BaseModel):
     categories: list = ['general', 'technology', 'business',
                         'entertainment', 'sports', 'health',
                         'science', 'politics']
-    hours_back: int = 2  # Ne re-vectorise que les X dernières heures
+    hours_back: int = 24  # Ne re-vectorise que les X dernières heures
 
 
 class SemanticNewsRequest(BaseModel):
@@ -1873,32 +1873,46 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         print(f"🔄 Auto-embed: {category}")
         all_articles = []
 
-        # Flagship feeds
+        # ── Flagship feeds — tous les articles du jour ──
         flagship = FLAGSHIP_FEEDS.get(category, FLAGSHIP_FEEDS.get('general', []))
-        rss_sources = deduplicate_feeds(flagship)
+        flagship_sources = deduplicate_feeds(flagship)
 
-        # Supabase feeds
-        try:
-            supabase_feeds = await get_feeds_from_supabase(category=category, limit=10, langues=[])
-            rss_sources = deduplicate_feeds(rss_sources + supabase_feeds)
-        except:
-            pass
+        print(f"📡 Flagship feeds pour '{category}' ({len(flagship_sources)}):")
+        for name, url in flagship_sources:
+            print(f"   🏆 → {name}")
 
-        # ← AJOUTE ICI
-        print(f"📡 Flux utilisés pour '{category}' ({len(rss_sources[:15])}):")
-        for name, url in rss_sources[:15]:
-            print(f"   → {name}")    
-
-        # Fetch RSS
-        rss_results = await asyncio.gather(*[
-            fetch_rss_source(name, url, max_items=5)
-            for name, url in rss_sources[:15]
+        flagship_results = await asyncio.gather(*[
+            fetch_rss_source(name, url, max_items=20)  # ← tous les articles du jour
+            for name, url in flagship_sources
         ], return_exceptions=True)
-        for result in rss_results:
+        for result in flagship_results:
             if isinstance(result, list):
                 all_articles.extend(result)
 
-        # NewsAPI
+        print(f"   🏆 Flagship: {len(all_articles)} articles")
+
+        # ── Supabase feeds — 5 articles par source ──
+        try:
+            supabase_feeds = await get_feeds_from_supabase(
+                category=category, limit=10, langues=[]
+            )
+            supabase_sources = deduplicate_feeds(supabase_feeds)
+
+            print(f"📡 Supabase feeds pour '{category}' ({len(supabase_sources)}):")
+            for name, url in supabase_sources[:10]:
+                print(f"   📂 → {name}")
+
+            supabase_results = await asyncio.gather(*[
+                fetch_rss_source(name, url, max_items=5)
+                for name, url in supabase_sources[:10]
+            ], return_exceptions=True)
+            for result in supabase_results:
+                if isinstance(result, list):
+                    all_articles.extend(result)
+        except Exception as e:
+            print(f"⚠️ Supabase feeds erreur: {str(e)[:50]}")
+
+        # ── NewsAPI ──
         try:
             keywords = CATEGORY_KEYWORDS.get(category, 'actualité')
             async with httpx.AsyncClient() as client:
@@ -1913,7 +1927,8 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
                     },
                     timeout=15.0,
                 )
-            for article in response.json().get("articles", []):
+            newsapi_articles = response.json().get("articles", [])
+            for article in newsapi_articles:
                 if article.get("title") and article.get("title") != "[Removed]":
                     all_articles.append({
                         "title": article.get("title"),
@@ -1923,14 +1938,18 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
                         "source": article.get("source", {}).get("name"),
                         "published_at": article.get("publishedAt"),
                     })
-        except:
-            pass
+            print(f"   📰 NewsAPI: {len(newsapi_articles)} articles")
+        except Exception as e:
+            print(f"⚠️ NewsAPI erreur: {str(e)[:50]}")
 
+        # ── Dédupliquer ──
         unique_articles = deduplicate_articles(all_articles)
+        print(f"   📊 Total unique: {len(unique_articles)} articles")
+
         if not unique_articles:
             continue
 
-        # Vérifier articles existants
+        # ── Vérifier articles existants dans Supabase ──
         urls = [a.get("url") for a in unique_articles if a.get("url")]
         try:
             async with httpx.AsyncClient() as client:
@@ -1952,30 +1971,28 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
 
         new_articles = [a for a in unique_articles if a.get("url") not in existing_urls]
         total_skipped += len(unique_articles) - len(new_articles)
+        print(f"   ✨ {len(new_articles)} nouveaux, {len(unique_articles) - len(new_articles)} déjà en base")
 
         if not new_articles:
             continue
 
-        # Vectoriser
-        #plus riche en dessous.
-        #texts = [f"{a.get('title', '')}. {a.get('description', '') or ''}".strip()[:1000]
-        #         for a in new_articles]
-        
+        # ── Vectoriser — titre + description + source + catégorie ──
         texts = [
-                f"[{a.get('source', '')}] [{a.get('category', '')}] "
-                f"{a.get('title', '')}. "
-                f"{a.get('description', '') or ''}".strip()[:1000]
-                for a in new_articles
-            ]
-
+            f"[{a.get('source', '')}] [{category}] "
+            f"{a.get('title', '')}. "
+            f"{a.get('description', '') or ''}".strip()[:1000]
+            for a in new_articles
+        ]
 
         all_embeddings = []
         for i in range(0, len(texts), 32):
             batch = texts[i:i + 32]
             embeddings = await embed_texts(batch)
             all_embeddings.extend(embeddings)
+            print(f"   🔢 Batch {i//32 + 1}: {len(embeddings)} vecteurs")
             await asyncio.sleep(0.3)
 
+        # ── Stocker dans Supabase ──
         stored = 0
         for article, embedding in zip(new_articles, all_embeddings):
             if embedding:
@@ -1983,11 +2000,10 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
                 stored += 1
 
         total_embedded += stored
-        print(f"   ✅ {category}: {stored} nouveaux articles vectorisés")
+        print(f"   ✅ {category}: {stored} articles vectorisés et stockés")
         last_embed_time[category] = datetime.now(timezone.utc)
 
-
-    # Nettoyer les vieux articles
+    # ── Nettoyer les vieux articles (> 7 jours) ──
     try:
         async with httpx.AsyncClient() as client:
             await client.delete(
@@ -1999,8 +2015,9 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
                 params={"published_at": "lt.NOW() - INTERVAL '7 days'"},
                 timeout=10.0,
             )
-    except:
-        pass
+        print(f"🗑️ Vieux articles nettoyés (> 7 jours)")
+    except Exception as e:
+        print(f"⚠️ Nettoyage erreur: {str(e)[:50]}")
 
     return total_embedded, total_skipped
 
@@ -2009,17 +2026,21 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
 async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
     try:
-        print(f"🚀 Embed manuel: {len(req.categories)} catégories")
+        print(f"🚀 Embed manuel: {len(req.categories)} catégories, hours_back={req.hours_back}")
         total_embedded, total_skipped = await _embed_news_logic(
             req.categories, req.hours_back
         )
         print(f"✅ Embedding terminé : {total_embedded} nouveaux, {total_skipped} ignorés")
-        return {"success": True, "embedded": total_embedded, "skipped": total_skipped}
+        return {
+            "success": True,
+            "embedded": total_embedded,
+            "skipped": total_skipped,
+        }
     except Exception as e:
         print(f"❌ ERREUR embed_news: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
-
-
 
 
 
