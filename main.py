@@ -2344,7 +2344,13 @@ async def get_article_vector(req: ArticleVectorRequest, x_app_secret: str = Head
             )
         rows = r.json()
         if isinstance(rows, list) and rows and rows[0].get("embedding"):
-            return {"embedding": rows[0]["embedding"]}
+            embedding = rows[0]["embedding"]
+            # Convertir en liste de floats si c'est une string
+            if isinstance(embedding, str):
+                import json
+                embedding = json.loads(embedding)
+            embedding = [float(v) for v in embedding]
+            return {"embedding": embedding}
         return {"embedding": None}
     except Exception as e:
         print(f"⚠️ Erreur article_vector: {str(e)[:50]}")
