@@ -2277,11 +2277,9 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
 
 
 async def get_taste_vector(liked_urls: list) -> list:
-    """Calcule le centroïde des vecteurs des articles aimés"""
     if not liked_urls:
         return []
     try:
-        # Récupérer les vecteurs depuis Supabase
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/news_articles",
@@ -2299,8 +2297,11 @@ async def get_taste_vector(liked_urls: list) -> list:
         if not isinstance(rows, list) or not rows:
             return []
 
-        # Calculer le centroïde (moyenne des vecteurs)
-        embeddings = [row["embedding"] for row in rows if row.get("embedding")]
+        # ← Convertir en float explicitement
+        embeddings = [
+            [float(v) for v in row["embedding"]]
+            for row in rows if row.get("embedding")
+        ]
         if not embeddings:
             return []
 
@@ -2316,6 +2317,9 @@ async def get_taste_vector(liked_urls: list) -> list:
     except Exception as e:
         print(f"⚠️ Erreur get_taste_vector: {str(e)[:50]}")
         return []
+    
+
+    
     
 
 async def get_user_taste_profile(user_code: str, category: str) -> list:
@@ -2345,6 +2349,7 @@ async def get_user_taste_profile(user_code: str, category: str) -> list:
     except:
         return []
 
+
 async def update_user_taste_profile(
     user_code: str, category: str,
     new_article_vector: list, alpha: float = 0.15
@@ -2353,20 +2358,19 @@ async def update_user_taste_profile(
     if not user_code or not new_article_vector:
         return
     try:
-        # Récupérer le vecteur actuel
         current = await get_user_taste_profile(user_code, category)
 
         if current:
-            # EMA : nouveau = α × article + (1-α) × ancien
+            # ← Convertir en float explicitement
+            current_floats = [float(v) for v in current]
+            new_floats = [float(v) for v in new_article_vector]
             updated = [
-                alpha * new_article_vector[i] + (1 - alpha) * current[i]
-                for i in range(len(new_article_vector))
+                alpha * new_floats[i] + (1 - alpha) * current_floats[i]
+                for i in range(len(new_floats))
             ]
         else:
-            # Premier like → vecteur = article
-            updated = new_article_vector
+            updated = [float(v) for v in new_article_vector]
 
-        # Sauvegarder dans Supabase
         async with httpx.AsyncClient() as client:
             await client.post(
                 f"{SUPABASE_URL}/rest/v1/user_taste_profiles",
@@ -2386,7 +2390,7 @@ async def update_user_taste_profile(
             )
         print(f"   🧠 EMA mis à jour pour {user_code} / {category}")
     except Exception as e:
-        print(f"⚠️ Erreur update_taste_profile: {str(e)[:50]}")
+        print(f"⚠️ Erreur update_taste_profile: {str(e)[:100]}")
 
 
 
