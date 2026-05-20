@@ -367,9 +367,19 @@ class SemanticNewsRequest(BaseModel):
     locations: list = []
     liked_titles: list = []
     disliked_titles: list = []
+    liked_urls: list = []           # ← ajoute
+    liked_with_dates: list = []     # ← ajoute
+    user_code: str = ""             # ← ajoute
     category: str = 'general'
     limit: int = 30
     hours_back: int = 48
+
+
+class NewsLikeRequest(BaseModel):
+    user_code: str
+    article_url: str
+    category: str
+    rating: int
 
 # ── HELPERS RSS ──
 def is_excluded_url(url):
@@ -2054,8 +2064,6 @@ async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
 
 
 
-
-
 @app.post("/news/semantic")
 async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
@@ -2064,12 +2072,79 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
         t0 = time.time()
         print(f"🔍 Semantic news: category={req.category}")
 
-        # ── 1. Construire les textes par dimension ──
+        all_scores = {}
+
+        # ── 1. Vecteur EMA persistant (signal le plus fort) ──
+        t_ema = time.time()
+        ema_vector = []
+        if req.user_code:
+            ema_vector = await get_user_taste_profile(req.user_code, req.category)
+            if ema_vector:
+                print(f"   🧠 EMA vector trouvé ({time.time()-t_ema:.2f}s)")
+                async with httpx.AsyncClient() as client:
+                    r = await client.post(
+                        f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
+                        headers={
+                            "apikey": SUPABASE_KEY,
+                            "Authorization": f"Bearer {SUPABASE_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "query_embedding": ema_vector,
+                            "p_category": req.category if req.category != 'general' else None,
+                            "p_limit": 50,
+                            "p_hours": req.hours_back,
+                        },
+                        timeout=10.0,
+                    )
+                results = r.json()
+                print(f"   🎯 EMA (×0.50): {len(results) if isinstance(results, list) else 'ERR'} résultats")
+                if isinstance(results, list):
+                    for article in results:
+                        url = article.get("url")
+                        if url:
+                            if url not in all_scores:
+                                all_scores[url] = {"article": article, "score": 0}
+                            all_scores[url]["score"] += article.get("similarity", 0) * 0.50
+
+        # ── 2. Centroïde des articles aimés ──
+        t_centroid = time.time()
+        centroid_vector = []
+        if req.liked_urls:
+            centroid_vector = await get_taste_vector(req.liked_urls)
+            if centroid_vector:
+                print(f"   🎯 Centroïde calculé ({time.time()-t_centroid:.2f}s)")
+                weight = 0.30 if ema_vector else 0.50
+                async with httpx.AsyncClient() as client:
+                    r = await client.post(
+                        f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
+                        headers={
+                            "apikey": SUPABASE_KEY,
+                            "Authorization": f"Bearer {SUPABASE_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "query_embedding": centroid_vector,
+                            "p_category": req.category if req.category != 'general' else None,
+                            "p_limit": 50,
+                            "p_hours": req.hours_back,
+                        },
+                        timeout=10.0,
+                    )
+                results = r.json()
+                print(f"   🎯 Centroïde (×{weight}): {len(results) if isinstance(results, list) else 'ERR'} résultats")
+                if isinstance(results, list):
+                    for article in results:
+                        url = article.get("url")
+                        if url:
+                            if url not in all_scores:
+                                all_scores[url] = {"article": article, "score": 0}
+                            all_scores[url]["score"] += article.get("similarity", 0) * weight
+
+        # ── 3. Construire textes pour dimensions restantes ──
         texts = {}
         if req.interests:
             texts["interests"] = ", ".join(req.interests)
-        if req.liked_titles:
-            texts["liked"] = " | ".join(req.liked_titles[:10])
         profile_parts = []
         if req.profile_traits:
             profile_parts.append(f"Traits : {', '.join(req.profile_traits)}")
@@ -2081,105 +2156,89 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
             profile_parts.append(f"Valeurs : {', '.join(req.context.get('valeurs', []))}")
         if profile_parts:
             texts["profile"] = " | ".join(profile_parts)
-        if not texts:
+        if not texts and not ema_vector and not centroid_vector:
             texts["category"] = CATEGORY_KEYWORDS.get(req.category, 'actualité france')
 
-        print(f"   📝 Dimensions: {list(texts.keys())} — {time.time()-t0:.2f}s")
-
-        # ── 2. Vectoriser chaque dimension ──
+        # Poids adaptés selon disponibilité EMA/centroïde
         WEIGHTS = {
-            "liked":     0.45,
-            "interests": 0.30,
-            "profile":   0.15,
-            "category":  0.10,
+            "interests": 0.25 if (ema_vector or centroid_vector) else 0.40,
+            "profile":   0.15 if (ema_vector or centroid_vector) else 0.25,
+            "category":  0.05 if (ema_vector or centroid_vector) else 0.10,
         }
-        text_list = list(texts.values())
-        keys_list = list(texts.keys())
 
-        t_embed = time.time()
-        embeddings = await embed_texts(text_list)
-        print(f"   🔢 Embedding Mistral: {time.time()-t_embed:.2f}s ({len(text_list)} textes)")
+        print(f"   📝 Dimensions texte: {list(texts.keys())} — {time.time()-t0:.2f}s")
 
-        if not embeddings:
+        # ── 4. Vectoriser + rechercher les dimensions texte ──
+        if texts:
+            text_list = list(texts.values())
+            keys_list = list(texts.keys())
+
+            t_embed = time.time()
+            embeddings = await embed_texts(text_list)
+            print(f"   🔢 Embedding Mistral: {time.time()-t_embed:.2f}s ({len(text_list)} textes)")
+
+            t_search = time.time()
+            for key, embedding in zip(keys_list, embeddings):
+                weight = WEIGHTS.get(key, 0.1)
+                t_key = time.time()
+                async with httpx.AsyncClient() as client:
+                    r = await client.post(
+                        f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
+                        headers={
+                            "apikey": SUPABASE_KEY,
+                            "Authorization": f"Bearer {SUPABASE_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "query_embedding": embedding,
+                            "p_category": req.category if req.category != 'general' else None,
+                            "p_limit": 50,
+                            "p_hours": req.hours_back,
+                        },
+                        timeout=10.0,
+                    )
+                results = r.json()
+                print(f"   🎯 {key} (×{weight}): {len(results) if isinstance(results, list) else 'ERR'} résultats — {time.time()-t_key:.2f}s")
+                if not isinstance(results, list):
+                    continue
+                for article in results:
+                    url = article.get("url")
+                    if not url:
+                        continue
+                    if url not in all_scores:
+                        all_scores[url] = {"article": article, "score": 0}
+                    all_scores[url]["score"] += article.get("similarity", 0) * weight
+
+            print(f"   🔍 Total recherches pgvector: {time.time()-t_search:.2f}s")
+
+        if not all_scores:
             return {"articles": []}
 
-        # ── 3. Recherche vectorielle pour chaque dimension ──
-        all_scores = {}
-
-        t_search = time.time()
-        for key, embedding in zip(keys_list, embeddings):
-            weight = WEIGHTS.get(key, 0.1)
-            t_key = time.time()
-            async with httpx.AsyncClient() as client:
-                r = await client.post(
-                    f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
-                    headers={
-                        "apikey": SUPABASE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "query_embedding": embedding,
-                        "p_category": req.category if req.category != 'general' else None,
-                        "p_limit": 50,
-                        "p_hours": req.hours_back,
-                    },
-                    timeout=10.0,
-                )
-            results = r.json()
-            print(f"   🎯 {key} (×{weight}): {len(results) if isinstance(results, list) else 'ERR'} résultats — {time.time()-t_key:.2f}s")
-
-            if not isinstance(results, list):
-                print(f"⚠️ Erreur recherche {key}: {results}")
-                continue
-
-            for article in results:
-                url = article.get("url")
-                if not url:
-                    continue
-                similarity = article.get("similarity", 0)
-                weighted_score = similarity * weight
-                if url not in all_scores:
-                    all_scores[url] = {"article": article, "score": 0}
-                all_scores[url]["score"] += weighted_score
-
-        print(f"   🔍 Total recherches pgvector: {time.time()-t_search:.2f}s")
-
-        # ── 4. Filtrer les articles non aimés ──
-        t_filter = time.time()
+        # ── 5. Filtrer les articles non aimés ──
         disliked_lower = [t.lower() for t in req.disliked_titles]
         filtered = {
             url: data for url, data in all_scores.items()
             if not any(d in data["article"].get("title", "").lower()
                       for d in disliked_lower)
         }
-        print(f"   🚫 Filtrage disliked: {time.time()-t_filter:.2f}s")
 
-      # ── 5. Trier par score final + date ──
-
-        # Normaliser les scores entre 0 et 1
+        # ── 6. Trier par score final + fraîcheur ──
         max_score = max((d["score"] for d in filtered.values()), default=1)
         min_score = min((d["score"] for d in filtered.values()), default=0)
         score_range = max_score - min_score or 1
-
         now = datetime.now(timezone.utc)
 
         for url, data in filtered.items():
-            # Score normalisé 0-1
             normalized_score = (data["score"] - min_score) / score_range
-
-            # Score temporel 0-1 (article de moins de 48h = proche de 1)
             try:
                 pub_str = str(data["article"].get("published_at", ""))
                 pub_date = datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
                 if pub_date.tzinfo is None:
                     pub_date = pub_date.replace(tzinfo=timezone.utc)
                 age_hours = (now - pub_date).total_seconds() / 3600
-                time_score = max(0, 1 - (age_hours / 48))  # décroît sur 48h
+                time_score = max(0, 1 - (age_hours / 48))
             except:
                 time_score = 0
-
-            # Score final combiné — 60% similarité, 40% fraîcheur
             data["final_score"] = normalized_score * 0.60 + time_score * 0.40
 
         sorted_articles = sorted(
@@ -2188,7 +2247,7 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
             reverse=True
         )[:req.limit]
 
-        # ── 6. Formater le résultat ──
+        # ── 7. Formater le résultat ──
         final = []
         for item in sorted_articles:
             a = item["article"]
@@ -2200,7 +2259,7 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
                 "image_url": a.get("image_url"),
                 "published_at": str(a.get("published_at", "")),
                 "category": a.get("category"),
-                "score": round(item["final_score"], 4),  # ← final_score
+                "score": round(item["final_score"], 4),
             })
 
         print(f"✅ Semantic: {len(final)} articles — TOTAL: {time.time()-t0:.2f}s")
@@ -2211,3 +2270,170 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
         import traceback
         traceback.print_exc()
         return {"articles": []}
+
+
+
+
+
+
+async def get_taste_vector(liked_urls: list) -> list:
+    """Calcule le centroïde des vecteurs des articles aimés"""
+    if not liked_urls:
+        return []
+    try:
+        # Récupérer les vecteurs depuis Supabase
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/news_articles",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                params={
+                    "select": "embedding",
+                    "url": f"in.({','.join([chr(34) + u + chr(34) for u in liked_urls[:20]])})",
+                },
+                timeout=10.0,
+            )
+        rows = r.json()
+        if not isinstance(rows, list) or not rows:
+            return []
+
+        # Calculer le centroïde (moyenne des vecteurs)
+        embeddings = [row["embedding"] for row in rows if row.get("embedding")]
+        if not embeddings:
+            return []
+
+        n = len(embeddings)
+        dim = len(embeddings[0])
+        centroid = [
+            sum(embeddings[i][j] for i in range(n)) / n
+            for j in range(dim)
+        ]
+        print(f"   🎯 Centroïde calculé sur {n} articles aimés")
+        return centroid
+
+    except Exception as e:
+        print(f"⚠️ Erreur get_taste_vector: {str(e)[:50]}")
+        return []
+    
+
+async def get_user_taste_profile(user_code: str, category: str) -> list:
+    """Récupère le vecteur de goût persistant de l'utilisateur"""
+    if not user_code:
+        return []
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/user_taste_profiles",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                params={
+                    "select": "taste_vector,likes_count",
+                    "user_code": f"eq.{user_code}",
+                    "category": f"eq.{category}",
+                    "limit": "1",
+                },
+                timeout=5.0,
+            )
+        rows = r.json()
+        if isinstance(rows, list) and rows:
+            return rows[0].get("taste_vector", [])
+        return []
+    except:
+        return []
+
+async def update_user_taste_profile(
+    user_code: str, category: str,
+    new_article_vector: list, alpha: float = 0.15
+):
+    """Met à jour le vecteur de goût via EMA"""
+    if not user_code or not new_article_vector:
+        return
+    try:
+        # Récupérer le vecteur actuel
+        current = await get_user_taste_profile(user_code, category)
+
+        if current:
+            # EMA : nouveau = α × article + (1-α) × ancien
+            updated = [
+                alpha * new_article_vector[i] + (1 - alpha) * current[i]
+                for i in range(len(new_article_vector))
+            ]
+        else:
+            # Premier like → vecteur = article
+            updated = new_article_vector
+
+        # Sauvegarder dans Supabase
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{SUPABASE_URL}/rest/v1/user_taste_profiles",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates",
+                },
+                json={
+                    "user_code": user_code,
+                    "category": category,
+                    "taste_vector": updated,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                timeout=5.0,
+            )
+        print(f"   🧠 EMA mis à jour pour {user_code} / {category}")
+    except Exception as e:
+        print(f"⚠️ Erreur update_taste_profile: {str(e)[:50]}")
+
+
+
+@app.post("/news/like")
+async def news_like(req: NewsLikeRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    try:
+        # Récupérer le vecteur de l'article
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/news_articles",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                params={
+                    "select": "embedding",
+                    "url": f"eq.{req.article_url}",
+                    "limit": "1",
+                },
+                timeout=5.0,
+            )
+        rows = r.json()
+        if not isinstance(rows, list) or not rows:
+            return {"success": False, "reason": "article non trouvé"}
+
+        article_vector = rows[0].get("embedding")
+        if not article_vector:
+            return {"success": False, "reason": "vecteur manquant"}
+
+        # Alpha selon le rating
+        # 5⭐ → forte influence, 4⭐ → influence normale
+        # 1-2⭐ → influence négative (s'éloigner)
+        if req.rating >= 4:
+            alpha = 0.15 if req.rating == 4 else 0.25
+            await update_user_taste_profile(
+                req.user_code, req.category, article_vector, alpha
+            )
+        elif req.rating <= 2:
+            # Inverser le vecteur pour s'éloigner
+            inverted = [-v for v in article_vector]
+            await update_user_taste_profile(
+                req.user_code, req.category, inverted, 0.05
+            )
+
+        return {"success": True}
+
+    except Exception as e:
+        print(f"❌ ERREUR news_like: {str(e)}")
+        return {"success": False, "error": str(e)}
