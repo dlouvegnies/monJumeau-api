@@ -369,7 +369,7 @@ class SemanticNewsRequest(BaseModel):
     disliked_titles: list = []
     liked_urls: list = []           # ← ajoute
     liked_with_dates: list = []     # ← ajoute
-    user_code: str = ""             # ← ajoute
+    taste_vector: list = []  # ← EMA local
     category: str = 'general'
     limit: int = 30
     hours_back: int = 48
@@ -380,6 +380,10 @@ class NewsLikeRequest(BaseModel):
     article_url: str
     category: str
     rating: int
+
+
+class ArticleVectorRequest(BaseModel):
+    url: str
 
 # ── HELPERS RSS ──
 def is_excluded_url(url):
@@ -2076,11 +2080,10 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
 
         # ── 1. Vecteur EMA persistant (signal le plus fort) ──
         t_ema = time.time()
-        ema_vector = []
-        if req.user_code:
-            ema_vector = await get_user_taste_profile(req.user_code, req.category)
-            if ema_vector:
-                print(f"   🧠 EMA vector trouvé ({time.time()-t_ema:.2f}s)")
+        # ── 1. Vecteur EMA local (priorité maximale) ──
+        ema_vector = [float(v) for v in req.taste_vector] if req.taste_vector else []
+        if ema_vector:
+                print(f"   🧠 EMA local reçu ({len(ema_vector)} dims)")
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
                         f"{SUPABASE_URL}/rest/v1/rpc/search_news_articles",
@@ -2319,86 +2322,12 @@ async def get_taste_vector(liked_urls: list) -> list:
         return []
     
 
-    
-    
 
-async def get_user_taste_profile(user_code: str, category: str) -> list:
-    """Récupère le vecteur de goût persistant de l'utilisateur"""
-    if not user_code:
-        return []
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(
-                f"{SUPABASE_URL}/rest/v1/user_taste_profiles",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                },
-                params={
-                    "select": "taste_vector,likes_count",
-                    "user_code": f"eq.{user_code}",
-                    "category": f"eq.{category}",
-                    "limit": "1",
-                },
-                timeout=5.0,
-            )
-        rows = r.json()
-        if isinstance(rows, list) and rows:
-            return rows[0].get("taste_vector", [])
-        return []
-    except:
-        return []
-
-
-async def update_user_taste_profile(
-    user_code: str, category: str,
-    new_article_vector: list, alpha: float = 0.15
-):
-    """Met à jour le vecteur de goût via EMA"""
-    if not user_code or not new_article_vector:
-        return
-    try:
-        current = await get_user_taste_profile(user_code, category)
-
-        if current:
-            # ← Convertir en float explicitement
-            current_floats = [float(v) for v in current]
-            new_floats = [float(v) for v in new_article_vector]
-            updated = [
-                alpha * new_floats[i] + (1 - alpha) * current_floats[i]
-                for i in range(len(new_floats))
-            ]
-        else:
-            updated = [float(v) for v in new_article_vector]
-
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{SUPABASE_URL}/rest/v1/user_taste_profiles",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates",
-                },
-                json={
-                    "user_code": user_code,
-                    "category": category,
-                    "taste_vector": updated,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-                timeout=5.0,
-            )
-        print(f"   🧠 EMA mis à jour pour {user_code} / {category}")
-    except Exception as e:
-        print(f"⚠️ Erreur update_taste_profile: {str(e)[:100]}")
-
-
-
-@app.post("/news/like")
-async def news_like(req: NewsLikeRequest, x_app_secret: str = Header(None)):
+   
+@app.post("/news/article_vector")
+async def get_article_vector(req: ArticleVectorRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
     try:
-        # Récupérer le vecteur de l'article
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/news_articles",
@@ -2408,36 +2337,15 @@ async def news_like(req: NewsLikeRequest, x_app_secret: str = Header(None)):
                 },
                 params={
                     "select": "embedding",
-                    "url": f"eq.{req.article_url}",
+                    "url": f"eq.{req.url}",
                     "limit": "1",
                 },
                 timeout=5.0,
             )
         rows = r.json()
-        if not isinstance(rows, list) or not rows:
-            return {"success": False, "reason": "article non trouvé"}
-
-        article_vector = rows[0].get("embedding")
-        if not article_vector:
-            return {"success": False, "reason": "vecteur manquant"}
-
-        # Alpha selon le rating
-        # 5⭐ → forte influence, 4⭐ → influence normale
-        # 1-2⭐ → influence négative (s'éloigner)
-        if req.rating >= 4:
-            alpha = 0.15 if req.rating == 4 else 0.25
-            await update_user_taste_profile(
-                req.user_code, req.category, article_vector, alpha
-            )
-        elif req.rating <= 2:
-            # Inverser le vecteur pour s'éloigner
-            inverted = [-v for v in article_vector]
-            await update_user_taste_profile(
-                req.user_code, req.category, inverted, 0.05
-            )
-
-        return {"success": True}
-
+        if isinstance(rows, list) and rows and rows[0].get("embedding"):
+            return {"embedding": rows[0]["embedding"]}
+        return {"embedding": None}
     except Exception as e:
-        print(f"❌ ERREUR news_like: {str(e)}")
-        return {"success": False, "error": str(e)}
+        print(f"⚠️ Erreur article_vector: {str(e)[:50]}")
+        return {"embedding": None}
