@@ -56,14 +56,14 @@ MISTRAL_EMBED_MODEL = "mistral-embed"
 CAT_MAP = {
     'general':       'presse',
     'technology':    'technologie',
-    'science':       'culture',
+    'science':       'environnement',  # ← science → environnement (le plus proche)
     'business':      'économie',
     'entertainment': 'culture',
     'sports':        'sport',
-    'health':        'culture',
-    'local':         'local',
-    'politics':      'politique',  # ← ajoute ça
+    'health':        'environnement',  # ← health → environnement (bien-être, nature)
+    'politics':      'politique',
 }
+
 
 CATEGORY_KEYWORDS = {
     'general': 'actualité france',
@@ -196,6 +196,9 @@ FLAGSHIP_FEEDS = {
             ('Mediapart', 'https://www.mediapart.fr/articles/feed'),
          ],
     }
+
+# Catégories sans correspondance dans Supabase → flagship uniquement
+CATEGORIES_WITHOUT_SUPABASE = ['health', 'science']
 
 pays_autorises = ['fra', 'cor', 'bre']
 
@@ -1864,6 +1867,7 @@ async def upsert_article(article: dict, embedding: list[float], category: str):
 
 
 
+
 async def _embed_news_logic(categories: list, hours_back: int = 2):
     """Logique d'embedding — appelable sans vérification du secret"""
     total_embedded = 0
@@ -1882,7 +1886,7 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
             print(f"   🏆 → {name}")
 
         flagship_results = await asyncio.gather(*[
-            fetch_rss_source(name, url, max_items=20)  # ← tous les articles du jour
+            fetch_rss_source(name, url, max_items=20)
             for name, url in flagship_sources
         ], return_exceptions=True)
         for result in flagship_results:
@@ -1891,26 +1895,29 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
 
         print(f"   🏆 Flagship: {len(all_articles)} articles")
 
-        # ── Supabase feeds — 5 articles par source ──
-        try:
-            supabase_feeds = await get_feeds_from_supabase(
-                category=category, limit=10, langues=[]
-            )
-            supabase_sources = deduplicate_feeds(supabase_feeds)
+        # ── Supabase feeds — uniquement si catégorie couverte ──
+        if category not in CATEGORIES_WITHOUT_SUPABASE:
+            try:
+                supabase_feeds = await get_feeds_from_supabase(
+                    category=category, limit=10, langues=[]
+                )
+                supabase_sources = deduplicate_feeds(supabase_feeds)
 
-            print(f"📡 Supabase feeds pour '{category}' ({len(supabase_sources)}):")
-            for name, url in supabase_sources[:10]:
-                print(f"   📂 → {name}")
+                print(f"📡 Supabase feeds pour '{category}' ({len(supabase_sources)}):")
+                for name, url in supabase_sources[:10]:
+                    print(f"   📂 → {name}")
 
-            supabase_results = await asyncio.gather(*[
-                fetch_rss_source(name, url, max_items=5)
-                for name, url in supabase_sources[:10]
-            ], return_exceptions=True)
-            for result in supabase_results:
-                if isinstance(result, list):
-                    all_articles.extend(result)
-        except Exception as e:
-            print(f"⚠️ Supabase feeds erreur: {str(e)[:50]}")
+                supabase_results = await asyncio.gather(*[
+                    fetch_rss_source(name, url, max_items=5)
+                    for name, url in supabase_sources[:10]
+                ], return_exceptions=True)
+                for result in supabase_results:
+                    if isinstance(result, list):
+                        all_articles.extend(result)
+            except Exception as e:
+                print(f"⚠️ Supabase feeds erreur: {str(e)[:50]}")
+        else:
+            print(f"   ⏭️ Supabase ignoré pour '{category}' — pas de catégorie correspondante")
 
         # ── NewsAPI ──
         try:
@@ -2020,6 +2027,9 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         print(f"⚠️ Nettoyage erreur: {str(e)[:50]}")
 
     return total_embedded, total_skipped
+
+
+
 
 
 @app.post("/news/embed")
