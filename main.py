@@ -94,6 +94,7 @@ RSS_SOURCES = {
         ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
         ('20 Minutes', 'https://www.20minutes.fr/feeds/rss/news'),
         ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
+        ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-politique.xml'),
     ],
     'technology': [
         ('01net', 'https://www.01net.com/actualites/feed/'),
@@ -101,6 +102,8 @@ RSS_SOURCES = {
         ('Frandroid', 'https://www.frandroid.com/feed'),
         ('Korben', 'https://korben.info/feed'),
         ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
+        ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-tech-medias.xml'),
+        ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-start-up.xml'),
     ],
     'science': [
         ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
@@ -108,7 +111,7 @@ RSS_SOURCES = {
         ('Science Post', 'https://sciencepost.fr/feed/'),
     ],
     'business': [
-        ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
+        ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-economie.xml'),
         ('Le Point Economie', 'https://www.lepoint.fr/economie/rss.xml'),
         ('BFM Business', 'https://www.bfmtv.com/rss/economie/'),
         ('Le Monde Economie', 'https://www.lemonde.fr/economie-francaise/rss_full.xml'),
@@ -155,6 +158,8 @@ FLAGSHIP_FEEDS = {
             ('Frandroid', 'https://www.frandroid.com/feed'),
             ('Korben', 'https://korben.info/feed'),
             ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
+            ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-tech-medias.xml'),
+            ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-start-up.xml'),
         ],
         'science': [
             ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
@@ -162,7 +167,7 @@ FLAGSHIP_FEEDS = {
             ('Science Post', 'https://sciencepost.fr/feed/'),
         ],
         'business': [
-            ('Les Echos', 'https://www.lesechos.fr/rss/rss_une.xml'),
+            ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-economie.xml'),
             ('Le Point Economie', 'https://www.lepoint.fr/economie/rss.xml'),
             ('BFM Business', 'https://www.bfmtv.com/rss/economie/'),
             ('Challenges', 'https://www.challenges.fr/rss.xml'),
@@ -194,6 +199,7 @@ FLAGSHIP_FEEDS = {
             ('BFM Politique', 'https://www.bfmtv.com/rss/politique/'),
             ('20 Minutes Politique', 'https://www.20minutes.fr/feeds/rss-politique.xml'),
             ('Mediapart', 'https://www.mediapart.fr/articles/feed'),
+            ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-politique.xml'),
          ],
     }
 
