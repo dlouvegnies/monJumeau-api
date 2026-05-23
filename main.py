@@ -142,8 +142,10 @@ FLAGSHIP_FEEDS = {
             #('Le Figaro', 'https://www.lefigaro.fr/rss/figaro_actualites.xml'),
             ('Le Figaro', 'https://news.google.com/rss/search?q=site:lefigaro.fr&hl=fr&gl=FR&ceid=FR:fr'),
             ('Libération', 'https://www.liberation.fr/arc/outboundfeeds/rss/'),
-            ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
+            ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-politique.xml'),
             # Bonus — toujours bienvenus
+
+            ('France Info', 'https://www.francetvinfo.fr/titres.rss'),
             ('Le Parisien', 'https://feeds.leparisien.fr/leparisien/rss'),
             ('France Inter', 'https://www.radiofrance.fr/franceinter/rss'),
             ('BFM TV', 'https://www.bfmtv.com/rss/info/flux-rss/toutes-les-actualites/'),
@@ -1924,12 +1926,12 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
                 supabase_sources = deduplicate_feeds(supabase_feeds)
 
                 print(f"📡 Supabase feeds pour '{category}' ({len(supabase_sources)}):")
-                for name, url in supabase_sources[:10]:
+                for name, url in supabase_sources[:20]:
                     print(f"   📂 → {name}")
 
                 supabase_results = await asyncio.gather(*[
                     fetch_rss_source(name, url, max_items=5)
-                    for name, url in supabase_sources[:10]
+                    for name, url in supabase_sources[:20]
                 ], return_exceptions=True)
                 for result in supabase_results:
                     if isinstance(result, list):
@@ -2282,9 +2284,6 @@ async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(Non
 
 
 
-
-
-
 async def get_taste_vector(liked_urls: list) -> list:
     if not liked_urls:
         return []
@@ -2306,11 +2305,17 @@ async def get_taste_vector(liked_urls: list) -> list:
         if not isinstance(rows, list) or not rows:
             return []
 
-        # ← Convertir en float explicitement
-        embeddings = [
-            [float(v) for v in row["embedding"]]
-            for row in rows if row.get("embedding")
-        ]
+        embeddings = []
+        for row in rows:
+            emb = row.get("embedding")
+            if not emb:
+                continue
+            # ← Convertir string en liste si nécessaire
+            if isinstance(emb, str):
+                import json
+                emb = json.loads(emb)
+            embeddings.append([float(v) for v in emb])
+
         if not embeddings:
             return []
 
@@ -2326,8 +2331,6 @@ async def get_taste_vector(liked_urls: list) -> list:
     except Exception as e:
         print(f"⚠️ Erreur get_taste_vector: {str(e)[:50]}")
         return []
-    
-
 
    
 @app.post("/news/article_vector")
