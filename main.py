@@ -104,6 +104,8 @@ RSS_SOURCES = {
         ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
         ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-tech-medias.xml'),
         ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-start-up.xml'),
+        ('ZDNet France', 'https://www.zdnet.fr/feeds/rss/actualites/'),
+        ('Silicon', 'https://www.silicon.fr/feed'),
     ],
     'science': [
         ('Sciences et Avenir', 'https://www.sciencesetavenir.fr/rss.xml'),
