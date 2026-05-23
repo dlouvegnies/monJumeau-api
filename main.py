@@ -163,7 +163,7 @@ FLAGSHIP_FEEDS = {
             ('Korben', 'https://korben.info/feed'),
             ('Journal du Geek', 'https://www.journaldugeek.com/feed/'),
             ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-tech-medias.xml'),
-            ('Les Echos', 'https://services.lesechos.fr/rss/les-echos-start-up.xml'),
+            ('Les Echos', 'https://news.google.com/rss/search?q=les+echos+tech&hl=fr&gl=FR&ceid=FR:fr'),
             ('ZDNet France', 'https://www.zdnet.fr/feeds/rss/actualites/'),
             ('Silicon', 'https://www.silicon.fr/feed'),
         ],
