@@ -2706,3 +2706,24 @@ async def update_connection_alias(request: Request, x_app_secret: str = Header(N
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+    
+
+@app.delete("/connection/request/{request_id}")
+async def delete_connection_request(request_id: int, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={"id": f"eq.{request_id}"},
+                timeout=10.0,
+            )
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
