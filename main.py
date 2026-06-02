@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -2368,3 +2368,215 @@ async def get_article_vector(req: ArticleVectorRequest, x_app_secret: str = Head
     except Exception as e:
         print(f"⚠️ Erreur article_vector: {str(e)[:50]}")
         return {"embedding": None}
+    
+
+
+# ── CONNEXIONS ──────────────────────────────────────────────
+
+@app.post("/connection/request")
+async def connection_request(request: Request):
+    body = await request.json()
+    from_code  = body.get("from_code", "").strip().upper()
+    to_code    = body.get("to_code", "").strip().upper()
+    from_alias = body.get("from_alias", "Inconnu")
+
+    if not from_code or not to_code:
+        return {"success": False, "error": "Codes manquants"}
+    if from_code == to_code:
+        return {"success": False, "error": "Tu ne peux pas te connecter à toi-même"}
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Vérifier si demande pending existe déjà
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{from_code}",
+                    "to_code":   f"eq.{to_code}",
+                    "status":    "eq.pending",
+                    "select":    "id",
+                },
+                timeout=10.0,
+            )
+            if r.json():
+                return {"success": False, "error": "Demande déjà en attente"}
+
+            # Vérifier si déjà acceptée
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{from_code}",
+                    "to_code":   f"eq.{to_code}",
+                    "status":    "eq.accepted",
+                    "select":    "id",
+                },
+                timeout=10.0,
+            )
+            if r.json():
+                return {"success": False, "error": "Connexion déjà établie"}
+
+            # Créer la demande
+            r = await client.post(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers={**headers, "Prefer": "return=representation"},
+                json={
+                    "from_code":  from_code,
+                    "to_code":    to_code,
+                    "from_alias": from_alias,
+                    "status":     "pending",
+                },
+                timeout=10.0,
+            )
+            data = r.json()
+            request_id = data[0]["id"] if data else None
+            return {"success": True, "request_id": request_id}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/connection/pending/{code}")
+async def connection_pending(code: str, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    code = code.strip().upper()
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "to_code": f"eq.{code}",
+                    "status":  "eq.pending",
+                    "select":  "*",
+                    "order":   "created_at.desc",
+                },
+                timeout=10.0,
+            )
+        return {"requests": r.json() or []}
+    except Exception as e:
+        return {"requests": [], "error": str(e)}
+
+
+@app.post("/connection/respond")
+async def connection_respond(request: Request, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    body       = await request.json()
+    request_id = body.get("request_id")
+    accepted   = body.get("accepted", False)
+    my_code    = body.get("my_code", "").strip().upper()
+    my_alias   = body.get("my_alias", "Inconnu")
+
+    if not request_id:
+        return {"success": False, "error": "request_id manquant"}
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Récupérer la demande
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "id":      f"eq.{request_id}",
+                    "to_code": f"eq.{my_code}",
+                    "status":  "eq.pending",
+                    "select":  "*",
+                },
+                timeout=10.0,
+            )
+            data = r.json()
+            if not data:
+                return {"success": False, "error": "Demande introuvable"}
+
+            req_data   = data[0]
+            new_status = "accepted" if accepted else "rejected"
+
+            # Mettre à jour le statut
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={"id": f"eq.{request_id}"},
+                json={"status": new_status, "updated_at": "now()"},
+                timeout=10.0,
+            )
+
+        return {
+            "success":    True,
+            "status":     new_status,
+            "from_code":  req_data["from_code"],
+            "from_alias": req_data["from_alias"],
+            "my_alias":   my_alias,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/connection/accepted/{code}")
+async def connection_accepted(code: str, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    code = code.strip().upper()
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            # Connexions envoyées par moi et acceptées
+            r_sent = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{code}",
+                    "status":    "eq.accepted",
+                    "select":    "to_code,updated_at",
+                },
+                timeout=10.0,
+            )
+            # Connexions reçues et acceptées
+            r_received = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "to_code": f"eq.{code}",
+                    "status":  "eq.accepted",
+                    "select":  "from_code,from_alias,updated_at",
+                },
+                timeout=10.0,
+            )
+
+        connections = []
+        for c in (r_sent.json() or []):
+            connections.append({
+                "their_code":  c["to_code"],
+                "their_alias": "Inconnu",
+                "direction":   "sent",
+            })
+        for c in (r_received.json() or []):
+            connections.append({
+                "their_code":  c["from_code"],
+                "their_alias": c["from_alias"],
+                "direction":   "received",
+            })
+
+        return {"connections": connections}
+
+    except Exception as e:
+        return {"connections": [], "error": str(e)}
