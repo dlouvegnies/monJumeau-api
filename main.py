@@ -2517,6 +2517,50 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
                 timeout=10.0,
             )
 
+            # ── Si accepté → créer la connexion miroir (B → A) ──
+            if accepted:
+                # Vérifier si la connexion miroir existe déjà
+                r_mirror = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/connection_requests",
+                    headers=headers,
+                    params={
+                        "from_code": f"eq.{my_code}",
+                        "to_code":   f"eq.{req_data['from_code']}",
+                        "status":    "eq.accepted",
+                        "select":    "id",
+                    },
+                    timeout=10.0,
+                )
+                if not r_mirror.json():
+                    # Créer la connexion miroir B → A
+                    await client.post(
+                        f"{SUPABASE_URL}/rest/v1/connection_requests",
+                        headers={**headers, "Prefer": "return=representation"},
+                        json={
+                            "from_code":  my_code,
+                            "to_code":    req_data["from_code"],
+                            "from_alias": my_alias,  # ← alias de B vu par A
+                            "status":     "accepted",  # ← directement acceptée
+                        },
+                        timeout=10.0,
+                    )
+                    print(f"🔗 Connexion miroir créée: {my_code} → {req_data['from_code']}")
+
+                # Notifier A que B a accepté
+                db = get_db()
+                token_row = db.execute(
+                    'SELECT push_token FROM push_tokens WHERE my_code = ?',
+                    (req_data["from_code"],)
+                ).fetchone()
+                db.close()
+                if token_row:
+                    await send_push_notification(
+                        push_token=token_row['push_token'],
+                        title='🔗 Connexion acceptée !',
+                        body=f'{my_alias} a accepté ta demande de connexion.',
+                        data={'screen': 'Social'}
+                    )
+
         return {
             "success":    True,
             "status":     new_status,
@@ -2527,7 +2571,6 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
 
     except Exception as e:
         return {"success": False, "error": str(e)}
-
 
 @app.get("/connection/accepted/{code}")
 async def connection_accepted(code: str, x_app_secret: str = Header(None)):
