@@ -2623,3 +2623,17 @@ async def connection_accepted(code: str, x_app_secret: str = Header(None)):
 
     except Exception as e:
         return {"connections": [], "error": str(e)}
+    
+
+ # ──TEMPORAIRE POUR VIDER LA BASE
+ #  ──curl -X DELETE https://monjumeau-api.onrender.com/admin/reset-social \ -H "x-app-secret: TON_APP_SECRET"
+@app.delete("/admin/reset-social")
+async def reset_social(x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    db = get_db()
+    db.execute("DELETE FROM gifts;")
+    db.execute("DELETE FROM comparisons;")
+    db.execute("DELETE FROM push_tokens;")
+    db.commit()
+    db.close()
+    return {"success": True, "message": "Reset social OK"}
