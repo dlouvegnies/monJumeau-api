@@ -2377,8 +2377,8 @@ async def connection_request(request: Request):
     body = await request.json()
     from_code  = body.get("from_code", "").strip().upper()
     to_code    = body.get("to_code", "").strip().upper()
-    from_alias = body.get("from_alias", "Inconnu")  # prénom de A
-    to_alias   = body.get("to_alias", "Inconnu")    # surnom que A donne à B
+    from_alias = body.get("from_alias", "Inconnu")
+    to_alias   = body.get("to_alias", "Inconnu")
 
     if not from_code or not to_code:
         return {"success": False, "error": "Codes manquants"}
@@ -2430,18 +2430,41 @@ async def connection_request(request: Request):
                 json={
                     "from_code":  from_code,
                     "to_code":    to_code,
-                    "from_alias": from_alias,  # prénom de A → "Denis"
-                    "to_alias":   to_alias,    # surnom de A pour B → "Paulo"
+                    "from_alias": from_alias,
+                    "to_alias":   to_alias,
                     "status":     "pending",
                 },
                 timeout=10.0,
             )
             data = r.json()
             request_id = data[0]["id"] if data else None
-            return {"success": True, "request_id": request_id}
+
+        # ── Push notification à B ──
+        db = get_db()
+        token_row = db.execute(
+            'SELECT push_token FROM push_tokens WHERE my_code = ?',
+            (to_code,)
+        ).fetchone()
+        db.close()
+
+        if token_row:
+            await send_push_notification(
+                push_token=token_row['push_token'],
+                title='🔗 Nouvelle demande de connexion',
+                body=f'{from_alias} veut se connecter avec toi !',
+                data={'screen': 'Social'}
+            )
+            print(f"🔔 Push envoyée à {to_code}")
+        else:
+            print(f"⚠️ Pas de push token pour {to_code}")
+
+        return {"success": True, "request_id": request_id}
 
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+
 
 
 @app.get("/connection/pending/{code}")
