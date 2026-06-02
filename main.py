@@ -2537,10 +2537,10 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
                         f"{SUPABASE_URL}/rest/v1/connection_requests",
                         headers={**headers, "Prefer": "return=representation"},
                         json={
-                            "from_code":  my_code,
-                            "to_code":    req_data["from_code"],
-                            "from_alias": my_alias,  # ← alias de B vu par A
-                            "status":     "accepted",  # ← directement acceptée
+                            "from_code":  my_code,           # B
+                            "to_code":    req_data["from_code"],  # A
+                            "from_alias": my_alias,          # prénom de B → vu par A
+                            "status":     "accepted",
                         },
                         timeout=10.0,
                     )
