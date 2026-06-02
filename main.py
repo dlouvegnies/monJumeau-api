@@ -2645,3 +2645,64 @@ async def reset_social(x_app_secret: str = Header(None)):
     db.commit()
     db.close()
     return {"success": True, "message": "Reset social OK"}
+
+
+@app.get("/connection/sent/{code}")
+async def connection_sent(code: str, x_app_secret: str = Header(None)):
+    """Retourne toutes les demandes envoyées par A avec leur statut"""
+    verify_secret(x_app_secret)
+    code = code.strip().upper()
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{code}",
+                    "select":    "*",
+                    "order":     "created_at.desc",
+                },
+                timeout=10.0,
+            )
+        return {"requests": r.json() or []}
+    except Exception as e:
+        return {"requests": [], "error": str(e)}
+
+
+@app.patch("/connection/alias")
+async def update_connection_alias(request: Request, x_app_secret: str = Header(None)):
+    """Met à jour le surnom donné à un jumeau"""
+    verify_secret(x_app_secret)
+    body       = await request.json()
+    from_code  = body.get("from_code", "").strip().upper()
+    to_code    = body.get("to_code", "").strip().upper()
+    new_alias  = body.get("new_alias", "").strip()
+
+    if not from_code or not to_code or not new_alias:
+        return {"success": False, "error": "Données manquantes"}
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{from_code}",
+                    "to_code":   f"eq.{to_code}",
+                    "status":    "eq.accepted",
+                },
+                json={"to_alias": new_alias},
+                timeout=10.0,
+            )
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
