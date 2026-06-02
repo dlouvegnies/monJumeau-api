@@ -2728,10 +2728,8 @@ async def delete_connection_request(request_id: int, x_app_secret: str = Header(
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-
 @app.post("/connection/synced")
 async def connection_synced(request: Request, x_app_secret: str = Header(None)):
-    """Appelé par l'app après avoir synchronisé les connexions — supprime de Supabase"""
     verify_secret(x_app_secret)
     body    = await request.json()
     my_code = body.get("my_code", "").strip().upper()
@@ -2743,26 +2741,44 @@ async def connection_synced(request: Request, x_app_secret: str = Header(None)):
     }
     try:
         async with httpx.AsyncClient() as client:
-            # Supprimer toutes les lignes accepted où je suis impliqué
-            await client.delete(
+
+            # Marquer synced_from=true pour les lignes où je suis from_code
+            await client.patch(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
                 params={
                     "from_code": f"eq.{my_code}",
                     "status":    "eq.accepted",
                 },
+                json={"synced_from": True},
                 timeout=10.0,
             )
-            await client.delete(
+
+            # Marquer synced_to=true pour les lignes où je suis to_code
+            await client.patch(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
                 params={
                     "to_code": f"eq.{my_code}",
                     "status":  "eq.accepted",
                 },
+                json={"synced_to": True},
                 timeout=10.0,
             )
-            # Supprimer aussi les rejected
+
+            # Supprimer uniquement les lignes où LES DEUX ont syncé
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "status":      "eq.accepted",
+                    "synced_from": "eq.true",
+                    "synced_to":   "eq.true",
+                },
+                timeout=10.0,
+            )
+
+            # Supprimer les rejected (pas de race condition ici)
             await client.delete(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
@@ -2781,7 +2797,7 @@ async def connection_synced(request: Request, x_app_secret: str = Header(None)):
                 },
                 timeout=10.0,
             )
-        print(f"🗑️ Connexions supprimées de Supabase pour {my_code}")
+
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
