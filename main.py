@@ -2372,13 +2372,13 @@ async def get_article_vector(req: ArticleVectorRequest, x_app_secret: str = Head
 
 
 # ── CONNEXIONS ──────────────────────────────────────────────
-
 @app.post("/connection/request")
 async def connection_request(request: Request):
     body = await request.json()
     from_code  = body.get("from_code", "").strip().upper()
     to_code    = body.get("to_code", "").strip().upper()
-    from_alias = body.get("from_alias", "Inconnu")
+    from_alias = body.get("from_alias", "Inconnu")  # prénom de A
+    to_alias   = body.get("to_alias", "Inconnu")    # surnom que A donne à B
 
     if not from_code or not to_code:
         return {"success": False, "error": "Codes manquants"}
@@ -2430,7 +2430,8 @@ async def connection_request(request: Request):
                 json={
                     "from_code":  from_code,
                     "to_code":    to_code,
-                    "from_alias": from_alias,
+                    "from_alias": from_alias,  # prénom de A → "Denis"
+                    "to_alias":   to_alias,    # surnom de A pour B → "Paulo"
                     "status":     "pending",
                 },
                 timeout=10.0,
@@ -2476,7 +2477,7 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
     request_id = body.get("request_id")
     accepted   = body.get("accepted", False)
     my_code    = body.get("my_code", "").strip().upper()
-    my_alias   = body.get("my_alias", "Inconnu")
+    my_alias   = body.get("my_alias", "Inconnu")  # prénom de B
 
     if not request_id:
         return {"success": False, "error": "request_id manquant"}
@@ -2489,7 +2490,6 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
 
     try:
         async with httpx.AsyncClient() as client:
-            # Récupérer la demande
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
@@ -2508,7 +2508,6 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
             req_data   = data[0]
             new_status = "accepted" if accepted else "rejected"
 
-            # Mettre à jour le statut
             await client.patch(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
@@ -2517,9 +2516,10 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
                 timeout=10.0,
             )
 
-            # ── Si accepté → créer la connexion miroir (B → A) ──
             if accepted:
-                # Vérifier si la connexion miroir existe déjà
+                # Miroir B → A
+                # from_alias = prénom de B "Paul"
+                # to_alias   = surnom que B donne à A = on utilise from_alias de la demande "Denis"
                 r_mirror = await client.get(
                     f"{SUPABASE_URL}/rest/v1/connection_requests",
                     headers=headers,
@@ -2532,21 +2532,21 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
                     timeout=10.0,
                 )
                 if not r_mirror.json():
-                    # Créer la connexion miroir B → A
                     await client.post(
                         f"{SUPABASE_URL}/rest/v1/connection_requests",
                         headers={**headers, "Prefer": "return=representation"},
                         json={
-                            "from_code":  my_code,           # B
-                            "to_code":    req_data["from_code"],  # A
-                            "from_alias": my_alias,          # prénom de B → vu par A
+                            "from_code":  my_code,
+                            "to_code":    req_data["from_code"],
+                            "from_alias": my_alias,              # prénom de B → "Paul"
+                            "to_alias":   req_data["from_alias"], # prénom de A → "Denis"
                             "status":     "accepted",
                         },
                         timeout=10.0,
                     )
-                    print(f"🔗 Connexion miroir créée: {my_code} → {req_data['from_code']}")
+                    print(f"🔗 Miroir créé: {my_code} → {req_data['from_code']}")
 
-                # Notifier A que B a accepté
+                # Push notif à A
                 db = get_db()
                 token_row = db.execute(
                     'SELECT push_token FROM push_tokens WHERE my_code = ?',
@@ -2565,8 +2565,8 @@ async def connection_respond(request: Request, x_app_secret: str = Header(None))
             "success":    True,
             "status":     new_status,
             "from_code":  req_data["from_code"],
-            "from_alias": req_data["from_alias"],
-            "my_alias":   my_alias,
+            "from_alias": req_data["from_alias"],  # prénom de A → pour que B l'affiche
+            "to_alias":   req_data["to_alias"],    # surnom de A pour B → pas utilisé ici
         }
 
     except Exception as e:
@@ -2582,48 +2582,52 @@ async def connection_accepted(code: str, x_app_secret: str = Header(None)):
     }
     try:
         async with httpx.AsyncClient() as client:
-            # Connexions envoyées par moi et acceptées
+            # Lignes où je suis from_code → to_alias = surnom que j'ai donné
             r_sent = await client.get(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
                 params={
                     "from_code": f"eq.{code}",
                     "status":    "eq.accepted",
-                    "select":    "to_code,updated_at",
+                    "select":    "to_code,to_alias",
                 },
                 timeout=10.0,
             )
-            # Connexions reçues et acceptées
+            # Lignes où je suis to_code → from_alias = prénom de l'autre
             r_received = await client.get(
                 f"{SUPABASE_URL}/rest/v1/connection_requests",
                 headers=headers,
                 params={
                     "to_code": f"eq.{code}",
                     "status":  "eq.accepted",
-                    "select":  "from_code,from_alias,updated_at",
+                    "select":  "from_code,from_alias",
                 },
                 timeout=10.0,
             )
 
         connections = []
+
+        # Connexions envoyées — their_alias = to_alias (surnom que j'ai donné)
         for c in (r_sent.json() or []):
             connections.append({
                 "their_code":  c["to_code"],
-                "their_alias": "Inconnu",
-                "direction":   "sent",
+                "their_alias": c["to_alias"] or c["to_code"],
             })
+
+        # Connexions reçues — their_alias = from_alias (prénom de l'autre)
         for c in (r_received.json() or []):
             connections.append({
                 "their_code":  c["from_code"],
-                "their_alias": c["from_alias"],
-                "direction":   "received",
+                "their_alias": c["from_alias"] or c["from_code"],
             })
 
         return {"connections": connections}
 
     except Exception as e:
         return {"connections": [], "error": str(e)}
-    
+
+
+
 
  # ──TEMPORAIRE POUR VIDER LA BASE
  #  ──curl -X DELETE https://monjumeau-api.onrender.com/admin/reset-social \ -H "x-app-secret: TON_APP_SECRET"
