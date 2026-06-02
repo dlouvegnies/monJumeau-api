@@ -2605,27 +2605,31 @@ async def connection_accepted(code: str, x_app_secret: str = Header(None)):
                 timeout=10.0,
             )
 
-        connections = []
+        # Construire un dict pour dédupliquer par their_code
+        # Priorité aux lignes sent (to_alias = surnom personnalisé)
+        connections_map = {}
 
-        # Connexions envoyées — their_alias = to_alias (surnom que j'ai donné)
-        for c in (r_sent.json() or []):
-            connections.append({
-                "their_code":  c["to_code"],
-                "their_alias": c["to_alias"] or c["to_code"],
-            })
-
-        # Connexions reçues — their_alias = from_alias (prénom de l'autre)
+        # D'abord les received (priorité basse)
         for c in (r_received.json() or []):
-            connections.append({
-                "their_code":  c["from_code"],
-                "their_alias": c["from_alias"] or c["from_code"],
-            })
+            their_code = c["from_code"]
+            connections_map[their_code] = {
+                "their_code":  their_code,
+                "their_alias": c["from_alias"] or their_code,
+            }
 
-        return {"connections": connections}
+        # Ensuite les sent (priorité haute — écrase received)
+        # car to_alias = surnom personnalisé choisi par l'utilisateur
+        for c in (r_sent.json() or []):
+            their_code = c["to_code"]
+            connections_map[their_code] = {
+                "their_code":  their_code,
+                "their_alias": c["to_alias"] or their_code,
+            }
+
+        return {"connections": list(connections_map.values())}
 
     except Exception as e:
         return {"connections": [], "error": str(e)}
-
 
 
 
