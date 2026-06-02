@@ -2727,3 +2727,61 @@ async def delete_connection_request(request_id: int, x_app_secret: str = Header(
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@app.post("/connection/synced")
+async def connection_synced(request: Request, x_app_secret: str = Header(None)):
+    """Appelé par l'app après avoir synchronisé les connexions — supprime de Supabase"""
+    verify_secret(x_app_secret)
+    body    = await request.json()
+    my_code = body.get("my_code", "").strip().upper()
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            # Supprimer toutes les lignes accepted où je suis impliqué
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{my_code}",
+                    "status":    "eq.accepted",
+                },
+                timeout=10.0,
+            )
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "to_code": f"eq.{my_code}",
+                    "status":  "eq.accepted",
+                },
+                timeout=10.0,
+            )
+            # Supprimer aussi les rejected
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "from_code": f"eq.{my_code}",
+                    "status":    "eq.rejected",
+                },
+                timeout=10.0,
+            )
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "to_code": f"eq.{my_code}",
+                    "status":  "eq.rejected",
+                },
+                timeout=10.0,
+            )
+        print(f"🗑️ Connexions supprimées de Supabase pour {my_code}")
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
