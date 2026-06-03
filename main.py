@@ -15,6 +15,7 @@ import asyncio
 import html
 from urllib.parse import urlparse
 import random
+import asyncio
 
 app = FastAPI()
 app.add_middleware(
@@ -212,6 +213,11 @@ FLAGSHIP_FEEDS = {
 # Catégories sans correspondance dans Supabase → flagship uniquement
 CATEGORIES_WITHOUT_SUPABASE = ['health', 'science']
 
+
+# ── Nettoyage automatique des demande de co entre jumeaux──
+REJECTED_EXPIRY_DAYS = 7   # ← change selon tes préférences
+PENDING_EXPIRY_DAYS  = 14  # ← demandes pending trop vieilles
+
 pays_autorises = ['fra', 'cor', 'bre']
 
 spotify_token = None
@@ -396,6 +402,93 @@ class NewsLikeRequest(BaseModel):
 
 class ArticleVectorRequest(BaseModel):
     url: str
+
+
+
+# jumelé 
+async def cleanup_old_requests():
+    """Supprime les rejected et pending expirés de Supabase"""
+    while True:
+        try:
+            print(f"🗑️ Nettoyage automatique Supabase...")
+            headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient() as client:
+
+                # Supprimer les rejected > REJECTED_EXPIRY_DAYS jours
+                r1 = await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/connection_requests",
+                    headers=headers,
+                    params={
+                        "status":     "eq.rejected",
+                        "updated_at": f"lt.NOW() - INTERVAL '{REJECTED_EXPIRY_DAYS} days'",
+                    },
+                    timeout=10.0,
+                )
+                print(f"   ✅ Rejected supprimés ({r1.status_code})")
+
+                # Supprimer les pending > PENDING_EXPIRY_DAYS jours
+                r2 = await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/connection_requests",
+                    headers=headers,
+                    params={
+                        "status":     "eq.pending",
+                        "created_at": f"lt.NOW() - INTERVAL '{PENDING_EXPIRY_DAYS} days'",
+                    },
+                    timeout=10.0,
+                )
+                print(f"   ✅ Pending expirés supprimés ({r2.status_code})")
+
+        except Exception as e:
+            print(f"⚠️ Erreur cleanup: {str(e)[:50]}")
+
+        # ← Attendre 24h avant le prochain nettoyage
+        await asyncio.sleep(24 * 60 * 60)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Lancé au démarrage de l'API"""
+    asyncio.create_task(cleanup_old_requests())
+    print("🚀 Tâche de nettoyage automatique démarrée")
+
+
+
+@app.post("/admin/cleanup")
+async def manual_cleanup(x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient() as client:
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "status":     "eq.rejected",
+                    "updated_at": f"lt.NOW() - INTERVAL '{REJECTED_EXPIRY_DAYS} days'",
+                },
+                timeout=10.0,
+            )
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/connection_requests",
+                headers=headers,
+                params={
+                    "status":     "eq.pending",
+                    "created_at": f"lt.NOW() - INTERVAL '{PENDING_EXPIRY_DAYS} days'",
+                },
+                timeout=10.0,
+            )
+        return {"success": True, "message": "Nettoyage effectué"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 
 # ── HELPERS RSS ──
 def is_excluded_url(url):
