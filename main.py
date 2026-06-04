@@ -247,8 +247,14 @@ async def sb_post(table: str, body: dict, prefer: str = "") -> list:
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=headers, json=body, timeout=10.0,
         )
-    data = r.json()
-    return data if isinstance(data, list) else []
+    # ← Supabase retourne 201 avec corps vide si pas de "return=representation"
+    if not r.content:
+        return []
+    try:
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
 
 async def sb_patch(table: str, params: dict, body: dict) -> bool:
     async with httpx.AsyncClient() as client:
@@ -257,6 +263,7 @@ async def sb_patch(table: str, params: dict, body: dict) -> bool:
             headers=SB_HEADERS(), params=params, json=body, timeout=10.0,
         )
     return r.status_code in [200, 204]
+
 
 async def sb_delete(table: str, params: dict) -> bool:
     async with httpx.AsyncClient() as client:
