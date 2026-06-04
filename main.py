@@ -277,6 +277,17 @@ def init_db():
             expires_at TEXT
         )
     ''')
+
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS device_tokens (
+            token TEXT PRIMARY KEY,
+            my_code TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_seen TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+
+
     db.commit()
     db.close()
 
@@ -1056,6 +1067,48 @@ async def register_push(req: RegisterPushRequest, x_app_secret: str = Header(Non
     db.commit()
     db.close()
     return {"success": True}
+
+@app.post("/device/register")
+async def register_device(request: Request):
+    try:
+        body     = await request.json()
+        token    = request.headers.get('x-device-token', '')
+        my_code  = body.get('my_code', '').strip().upper()
+
+        if not token or not my_code:
+            return {"success": False, "error": "Token ou code manquant"}
+
+        db = get_db()
+        db.execute(
+            '''INSERT OR REPLACE INTO device_tokens (token, my_code, last_seen)
+               VALUES (?, ?, datetime('now'))''',
+            (token, my_code)
+        )
+        db.commit()
+        db.close()
+
+        print(f"✅ Device enregistré: {my_code} / {token[:8]}...")
+        return {"success": True}
+
+    except Exception as e:
+        print(f"❌ register_device erreur: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/device/token/{my_code}")
+async def get_device_token(my_code: str, x_app_secret: str = Header(None)):
+    """Vérifie si un device token existe pour ce code"""
+    verify_secret(x_app_secret)
+    db  = get_db()
+    row = db.execute(
+        'SELECT token, last_seen FROM device_tokens WHERE my_code = ?',
+        (my_code.strip().upper(),)
+    ).fetchone()
+    db.close()
+    return {
+        "token":     row['token'][:8] + '...' if row else None,
+        "last_seen": row['last_seen'] if row else None,
+    }
 
 @app.get("/push/token/{my_code}")
 async def get_push_token(my_code: str):
