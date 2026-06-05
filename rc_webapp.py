@@ -636,6 +636,16 @@ async function submitAnswers() {
   btn.innerHTML = '<i class="ph ph-circle-notch"></i> Envoi...';
 
   try {
+
+    // Construit raw_answers — { questionId: answerIndex }
+    const raw_answers = {};
+    QUESTIONS.forEach(q => {
+        if (q.type !== 'open' && answers[q.id] !== undefined) {
+        raw_answers[q.id] = answers[q.id];
+        }
+    });
+
+
     const res = await fetch(API_URL + '/rc/respond', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -647,6 +657,7 @@ async function submitAnswers() {
         respondent_name: isAnonymous ? null : (document.getElementById('respondent-name').value.trim() || null),
         is_anonymous:    isAnonymous,
         source:          'web',
+        raw_answers,     // ← ajoute
       }),
     });
     const data = await res.json();

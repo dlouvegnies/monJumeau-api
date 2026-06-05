@@ -408,6 +408,7 @@ class RCRespondRequest(BaseModel):
     respondent_name: Optional[str] = None
     is_anonymous: bool = True
     source:       str  = 'web'
+    raw_answers:     Optional[dict] = None   # ← ajoute
 
 class RCInviteRequest(BaseModel):
     session_key: str
@@ -1875,6 +1876,7 @@ async def rc_respond(req: RCRespondRequest):
             "respondent_name": req.respondent_name,
             "is_anonymous":   req.is_anonymous,
             "source":         req.source,
+            "raw_answers":    req.raw_answers,   # ← ajoute
         })
 
         # Incrémente le compteur
