@@ -398,6 +398,7 @@ class ArticleVectorRequest(BaseModel):
 # ── MODÈLES REGARD CROISÉ ──
 class RCCreateSessionRequest(BaseModel):
     my_code: str
+    version: str = 'universel'  # ← ajoute
 
 class RCRespondRequest(BaseModel):
     session_key: str
@@ -1820,26 +1821,29 @@ async def reset_social(x_app_secret: str = Header(None)):
 
 @app.post("/rc/session")
 async def rc_create_session(req: RCCreateSessionRequest, x_app_secret: str = Header(None)):
-    """Denis crée une session de questionnaire"""
     verify_secret(x_app_secret)
     try:
-        # Générer la session_key côté serveur
         import random
         chars    = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
         segments = [''.join(random.choices(chars, k=4)) for _ in range(6)]
         session_key = 'RC-' + '-'.join(segments)
 
+        version = req.version if req.version in ['universel', 'jeunes', 'pro'] else 'universel'
+
         await sb_post('rc_sessions', {
-            "session_key":   session_key,
+            "session_key":    session_key,
             "response_count": 0,
             "max_responses":  10,
-            "expires_at":    (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "version":        version,   # ← ajoute
+            "expires_at":     (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         })
 
-        print(f"✅ Session RC créée: {session_key}")
-        return {"success": True, "session_key": session_key}
+        print(f"✅ Session RC créée: {session_key} (version: {version})")
+        return {"success": True, "session_key": session_key, "version": version}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
 
 
 @app.post("/rc/respond")
@@ -2038,6 +2042,9 @@ async def rc_get_count(session_key: str):
         "expires_at":     session['expires_at'],
     }
 
+
+
+
 async def cleanup_old_requests():
     while True:
         try:
@@ -2056,12 +2063,11 @@ async def cleanup_old_requests():
 # WEBAPP
 
 @app.get("/rc/{session_key}", response_class=HTMLResponse)
-async def rc_webapp(session_key: str):
-    """Sert la WebApp de réponse au Regard Croisé"""
-    # Vérifie que la session existe
+async def rc_webapp(session_key: str, v: str = "universel"):
+    """Sert la WebApp — v = universel | jeunes | pro"""
     session = await sb_get_one('rc_sessions', {
         "session_key": f"eq.{session_key}",
-        "select":      "session_key,response_count,max_responses,expires_at",
+        "select":      "session_key,response_count,max_responses,expires_at,version",
     })
     if not session:
         return HTMLResponse(content="""
@@ -2071,5 +2077,14 @@ async def rc_webapp(session_key: str):
         </body></html>
         """, status_code=404)
 
-    html = RC_WEBAPP_HTML.replace("__SESSION_KEY__", session_key).replace("__API_URL__", str(os.environ.get("API_URL", "https://monjumeau-api.onrender.com")))
+    # Récupère la version depuis la session ou le paramètre URL
+    version = session.get('version') or v
+    if version not in ['universel', 'jeunes', 'pro']:
+        version = 'universel'
+
+    html = (RC_WEBAPP_HTML
+        .replace("__SESSION_KEY__", session_key)
+        .replace("__API_URL__", str(os.environ.get("API_URL", "https://monjumeau-api.onrender.com")))
+        .replace("__VERSION__", version)
+    )
     return HTMLResponse(content=html)
