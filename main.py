@@ -392,6 +392,42 @@ class NewsLikeRequest(BaseModel):
 class ArticleVectorRequest(BaseModel):
     url: str
 
+
+# ── MODÈLES REGARD CROISÉ ──
+class RCCreateSessionRequest(BaseModel):
+    my_code: str
+
+class RCRespondRequest(BaseModel):
+    session_key: str
+    vector:      dict
+    words:       list = []
+    relation:    str  = 'ami'
+    respondent_name: Optional[str] = None
+    is_anonymous: bool = True
+    source:       str  = 'web'
+
+class RCInviteRequest(BaseModel):
+    session_key: str
+    from_code:   str
+    to_code:     str
+    relation:    str = 'ami'
+
+class RCRespondInviteRequest(BaseModel):
+    invitation_id: str
+    vector:        dict
+    words:         list = []
+    respondent_name: Optional[str] = None
+    is_anonymous:  bool = True
+
+# ── ENDPOINTS REGARD CROISÉ ──
+
+
+
+
+
+
+
+
 # ── NETTOYAGE AUTOMATIQUE ──
 async def cleanup_old_requests():
     while True:
@@ -1775,3 +1811,241 @@ async def reset_social(x_app_secret: str = Header(None)):
     await sb_delete('comparisons', {"id": "neq.IMPOSSIBLE"})
     await sb_delete('push_tokens', {"id": "gt.0"})
     return {"success": True, "message": "Reset social OK"}
+
+
+
+# REGARD CROISEE
+
+@app.post("/rc/session")
+async def rc_create_session(req: RCCreateSessionRequest, x_app_secret: str = Header(None)):
+    """Denis crée une session de questionnaire"""
+    verify_secret(x_app_secret)
+    try:
+        # Générer la session_key côté serveur
+        import random
+        chars    = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+        segments = [''.join(random.choices(chars, k=4)) for _ in range(6)]
+        session_key = 'RC-' + '-'.join(segments)
+
+        await sb_post('rc_sessions', {
+            "session_key":   session_key,
+            "response_count": 0,
+            "max_responses":  10,
+            "expires_at":    (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        })
+
+        print(f"✅ Session RC créée: {session_key}")
+        return {"success": True, "session_key": session_key}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/rc/respond")
+async def rc_respond(req: RCRespondRequest):
+    """Paulo répond au questionnaire (web ou app)"""
+    try:
+        # Vérifie que la session existe
+        session = await sb_get_one('rc_sessions', {
+            "session_key": f"eq.{req.session_key}",
+            "select":      "*",
+        })
+        if not session:
+            return {"success": False, "error": "Session introuvable ou expirée"}
+
+        # Vérifie que la session n'est pas pleine
+        if session['response_count'] >= session['max_responses']:
+            return {"success": False, "error": "Nombre maximum de réponses atteint"}
+
+        # Enregistre la réponse
+        await sb_post('rc_responses', {
+            "session_key":    req.session_key,
+            "vector":         req.vector,
+            "words":          req.words,
+            "relation":       req.relation,
+            "respondent_name": req.respondent_name,
+            "is_anonymous":   req.is_anonymous,
+            "source":         req.source,
+        })
+
+        # Incrémente le compteur
+        await sb_patch('rc_sessions',
+            params={"session_key": f"eq.{req.session_key}"},
+            body={"response_count": session['response_count'] + 1}
+        )
+
+        print(f"✅ Réponse RC reçue: {req.session_key} ({req.relation})")
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/rc/responses/{session_key}")
+async def rc_get_responses(session_key: str, x_app_secret: str = Header(None)):
+    """Denis récupère ses réponses"""
+    verify_secret(x_app_secret)
+    try:
+        responses = await sb_get('rc_responses', {
+            "session_key": f"eq.{session_key}",
+            "select":      "*",
+            "order":       "created_at.asc",
+        })
+        return {"success": True, "responses": responses}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/rc/response/{response_id}")
+async def rc_delete_response(response_id: str, x_app_secret: str = Header(None)):
+    """Denis supprime une réponse après l'avoir récupérée"""
+    verify_secret(x_app_secret)
+    await sb_delete('rc_responses', {"id": f"eq.{response_id}"})
+    return {"success": True}
+
+
+@app.delete("/rc/session/{session_key}")
+async def rc_delete_session(session_key: str, x_app_secret: str = Header(None)):
+    """Denis supprime toute la session (CASCADE supprime les réponses)"""
+    verify_secret(x_app_secret)
+    await sb_delete('rc_sessions', {"session_key": f"eq.{session_key}"})
+    return {"success": True}
+
+
+@app.post("/rc/invite")
+async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
+    """Denis invite une connexion monJumeau (chemin B)"""
+    verify_secret(x_app_secret)
+    try:
+        # Vérifie que la session existe
+        session = await sb_get_one('rc_sessions', {
+            "session_key": f"eq.{req.session_key}",
+            "select":      "session_key",
+        })
+        if not session:
+            return {"success": False, "error": "Session introuvable"}
+
+        # Crée l'invitation
+        data = await sb_post('rc_invitations', {
+            "session_key": req.session_key,
+            "from_code":   req.from_code,
+            "to_code":     req.to_code,
+            "relation":    req.relation,
+            "status":      "pending",
+            "expires_at":  (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }, prefer="return=representation")
+
+        invitation_id = data[0]["id"] if data else None
+
+        # Push notification à Paulo
+        token_row = await sb_get_one('push_tokens', {"my_code": f"eq.{req.to_code}"})
+        if token_row:
+            await send_push_notification(
+                push_token=token_row['push_token'],
+                title='🪞 Regard Croisé',
+                body='Un proche t\'invite à partager ton regard sur lui !',
+                data={'screen': 'RegardCroise', 'invitation_id': str(invitation_id)}
+            )
+
+        return {"success": True, "invitation_id": invitation_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/rc/invitations/{my_code}")
+async def rc_get_invitations(my_code: str, x_app_secret: str = Header(None)):
+    """Paulo récupère ses invitations en attente"""
+    verify_secret(x_app_secret)
+    invitations = await sb_get('rc_invitations', {
+        "to_code": f"eq.{my_code}",
+        "status":  "eq.pending",
+        "select":  "*",
+        "order":   "created_at.desc",
+    })
+    return {"success": True, "invitations": invitations}
+
+
+@app.post("/rc/invitation/respond")
+async def rc_respond_invitation(req: RCRespondInviteRequest, x_app_secret: str = Header(None)):
+    """Paulo répond via l'app (chemin B)"""
+    verify_secret(x_app_secret)
+    try:
+        # Récupère l'invitation
+        invitation = await sb_get_one('rc_invitations', {
+            "id":     f"eq.{req.invitation_id}",
+            "status": "eq.pending",
+            "select": "*",
+        })
+        if not invitation:
+            return {"success": False, "error": "Invitation introuvable"}
+
+        # Enregistre la réponse
+        await sb_post('rc_responses', {
+            "session_key":    invitation['session_key'],
+            "vector":         req.vector,
+            "words":          req.words,
+            "relation":       invitation['relation'],
+            "respondent_name": req.respondent_name,
+            "is_anonymous":   req.is_anonymous,
+            "source":         "app",
+        })
+
+        # Marque l'invitation comme répondue
+        await sb_patch('rc_invitations',
+            params={"id": f"eq.{req.invitation_id}"},
+            body={"status": "responded"}
+        )
+
+        # Incrémente le compteur de la session
+        session = await sb_get_one('rc_sessions', {
+            "session_key": f"eq.{invitation['session_key']}",
+            "select": "response_count",
+        })
+        if session:
+            await sb_patch('rc_sessions',
+                params={"session_key": f"eq.{invitation['session_key']}"},
+                body={"response_count": session['response_count'] + 1}
+            )
+
+        # Push notif à Denis
+        token_row = await sb_get_one('push_tokens', {"my_code": f"eq.{invitation['from_code']}"})
+        if token_row:
+            await send_push_notification(
+                push_token=token_row['push_token'],
+                title='🪞 Nouvelle réponse Regard Croisé',
+                body='Un proche vient de répondre sur toi !',
+                data={'screen': 'RegardCroise'}
+            )
+
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/rc/session/{session_key}/count")
+async def rc_get_count(session_key: str):
+    """Vérifie le nombre de réponses — accessible sans auth (pour la WebApp)"""
+    session = await sb_get_one('rc_sessions', {
+        "session_key": f"eq.{session_key}",
+        "select":      "response_count,max_responses,expires_at",
+    })
+    if not session:
+        return {"valid": False}
+    return {
+        "valid":          True,
+        "response_count": session['response_count'],
+        "max_responses":  session['max_responses'],
+        "expires_at":     session['expires_at'],
+    }
+
+async def cleanup_old_requests():
+    while True:
+        try:
+            print("🗑️ Nettoyage automatique Supabase...")
+            # ... code existant ...
+
+            # ← Ajoute le nettoyage RC
+            await sb_delete('rc_sessions', {"expires_at": "lt.NOW()"})
+            print("   ✅ Sessions RC expirées supprimées")
+
+        except Exception as e:
+            print(f"⚠️ Erreur cleanup: {str(e)[:50]}")
+        await asyncio.sleep(24 * 60 * 60)
