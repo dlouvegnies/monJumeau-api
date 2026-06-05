@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request,Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -671,6 +671,10 @@ async def send_push_notification(push_token: str, title: str, body: str, data: d
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.head("/health")
+async def health_head():
+    return Response(status_code=200)
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
