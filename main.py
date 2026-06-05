@@ -14,6 +14,8 @@ from email.utils import parsedate_to_datetime
 import asyncio
 import html
 from urllib.parse import urlparse
+from fastapi.responses import HTMLResponse
+from rc_webapp import RC_WEBAPP_HTML
 
 app = FastAPI()
 app.add_middleware(
@@ -2049,3 +2051,25 @@ async def cleanup_old_requests():
         except Exception as e:
             print(f"⚠️ Erreur cleanup: {str(e)[:50]}")
         await asyncio.sleep(24 * 60 * 60)
+
+
+# WEBAPP
+
+@app.get("/rc/{session_key}", response_class=HTMLResponse)
+async def rc_webapp(session_key: str):
+    """Sert la WebApp de réponse au Regard Croisé"""
+    # Vérifie que la session existe
+    session = await sb_get_one('rc_sessions', {
+        "session_key": f"eq.{session_key}",
+        "select":      "session_key,response_count,max_responses,expires_at",
+    })
+    if not session:
+        return HTMLResponse(content="""
+        <html><body style="font-family:sans-serif;text-align:center;padding:40px">
+          <h2>Lien invalide ou expiré</h2>
+          <p>Ce questionnaire n'est plus disponible.</p>
+        </body></html>
+        """, status_code=404)
+
+    html = RC_WEBAPP_HTML.replace("__SESSION_KEY__", session_key).replace("__API_URL__", str(os.environ.get("API_URL", "https://monjumeau-api.onrender.com")))
+    return HTMLResponse(content=html)
