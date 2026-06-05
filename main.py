@@ -422,6 +422,7 @@ class RCRespondInviteRequest(BaseModel):
     words:         list = []
     respondent_name: Optional[str] = None
     is_anonymous:  bool = True
+    raw_answers:   Optional[dict] = None   # ← est-ce présent ?
 
 # ── ENDPOINTS REGARD CROISÉ ──
 
@@ -1998,6 +1999,7 @@ async def rc_respond_invitation(req: RCRespondInviteRequest, x_app_secret: str =
             "respondent_name": req.respondent_name,
             "is_anonymous":   req.is_anonymous,
             "source":         "app",
+            "raw_answers":    req.raw_answers,   # ← est-ce présent ?
         })
 
         # Marque l'invitation comme répondue
