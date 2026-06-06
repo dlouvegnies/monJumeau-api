@@ -2045,7 +2045,7 @@ async def rc_respond_invitation(req: RCRespondInviteRequest, x_app_secret: str =
         # Marque l'invitation comme répondue
         await sb_patch('rc_invitations',
             params={"id": f"eq.{req.invitation_id}"},
-            body={"status": "responded"}
+            body={"status": "accepted"}
         )
 
         # Incrémente le compteur de la session
