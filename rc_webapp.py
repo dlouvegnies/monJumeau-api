@@ -9,20 +9,14 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #F8F7FF;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+    background: #F8F7FF; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
   }
   .container { width: 100%; max-width: 480px; padding: 24px 20px 48px; }
-
   .header { text-align: center; margin-bottom: 28px; }
   .logo-icon {
-    width: 56px; height: 56px; border-radius: 28px;
-    background: #EEEDFE;
-    display: flex; align-items: center; justify-content: center;
-    margin: 0 auto 10px;
+    width: 56px; height: 56px; border-radius: 28px; background: #EEEDFE;
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 10px;
   }
   .logo { font-size: 26px; font-weight: 800; color: #1A1523; letter-spacing: -1px; }
   .logo span { color: #534AB7; font-style: italic; font-weight: 400; }
@@ -30,36 +24,16 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
     font-size: 13px; color: #71717A; margin-top: 4px;
     display: flex; align-items: center; justify-content: center; gap: 5px;
   }
-
-  /* Version badge */
   .version-badge {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 5px 12px; border-radius: 20px; margin-top: 8px;
     font-size: 12px; font-weight: 600;
   }
-
-  /* Progress */
-  .progress-wrap {
-    display: flex; align-items: center; gap: 10px; margin-bottom: 24px;
-  }
-  .progress-bar {
-    flex: 1; height: 4px; background: #E4E4E7;
-    border-radius: 2px; overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%; background: #534AB7; border-radius: 2px;
-    transition: width 0.3s ease;
-  }
-  .progress-text {
-    font-size: 13px; color: #71717A; white-space: nowrap;
-    display: flex; align-items: center; gap: 4px;
-  }
-
-  /* Cards */
-  .card {
-    background: white; border-radius: 16px; padding: 22px;
-    border: 0.5px solid #E4E4E7; margin-bottom: 14px;
-  }
+  .progress-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+  .progress-bar { flex: 1; height: 4px; background: #E4E4E7; border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #534AB7; border-radius: 2px; transition: width 0.3s ease; }
+  .progress-text { font-size: 13px; color: #71717A; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+  .card { background: white; border-radius: 16px; padding: 22px; border: 0.5px solid #E4E4E7; margin-bottom: 14px; }
   .info-banner {
     display: flex; align-items: flex-start; gap: 10px;
     background: #EEEDFE; border-radius: 10px; padding: 12px 14px;
@@ -71,43 +45,27 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
     letter-spacing: 1px; text-transform: uppercase;
     margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
   }
-
-  /* Relation grid */
-  .relation-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 10px; margin-bottom: 18px;
-  }
+  .relation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
   .relation-btn {
-    padding: 12px 10px; border-radius: 10px;
-    border: 1.5px solid #E4E4E7; background: white;
-    font-size: 14px; color: #3F3F46; cursor: pointer;
-    text-align: center; font-family: inherit;
-    transition: all 0.15s;
+    padding: 12px 10px; border-radius: 10px; border: 1.5px solid #E4E4E7;
+    background: white; font-size: 14px; color: #3F3F46; cursor: pointer;
+    text-align: center; font-family: inherit; transition: all 0.15s;
     display: flex; flex-direction: column; align-items: center; gap: 6px;
   }
   .relation-btn i { font-size: 20px; color: #A1A1AA; transition: color 0.15s; }
   .relation-btn.selected { border-color: #534AB7; background: #EEEDFE; color: #534AB7; font-weight: 600; }
   .relation-btn.selected i { color: #534AB7; }
-
-  /* Input */
   .input-wrap { position: relative; margin-bottom: 14px; }
   .input-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 16px; color: #A1A1AA; }
   .text-input {
-    width: 100%; padding: 12px 16px 12px 38px;
-    border-radius: 10px; border: 1.5px solid #E4E4E7;
-    font-size: 15px; color: #1A1523; outline: none;
+    width: 100%; padding: 12px 16px 12px 38px; border-radius: 10px;
+    border: 1.5px solid #E4E4E7; font-size: 15px; color: #1A1523; outline: none;
     font-family: inherit; transition: border-color 0.15s; background: white;
   }
   .text-input:focus { border-color: #534AB7; }
-
-  /* Anonyme */
-  .anon-row {
-    display: flex; align-items: center; gap: 10px;
-    cursor: pointer; padding: 8px 0;
-  }
+  .anon-row { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 8px 0; }
   .anon-checkbox {
-    width: 22px; height: 22px; border-radius: 6px;
-    border: 1.5px solid #D4D4D8;
+    width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid #D4D4D8;
     display: flex; align-items: center; justify-content: center;
     transition: all 0.15s; flex-shrink: 0; background: white;
   }
@@ -115,93 +73,64 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
   .anon-checkbox i { font-size: 14px; color: white; }
   .anon-label { font-size: 14px; color: #52525B; display: flex; align-items: center; gap: 6px; }
   .anon-label i { font-size: 16px; color: #A1A1AA; }
-
-  /* Question */
   .question-number {
-    font-size: 11px; font-weight: 600; color: #534AB7;
-    letter-spacing: 1px; text-transform: uppercase;
-    margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 600; color: #534AB7; letter-spacing: 1px;
+    text-transform: uppercase; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
   }
-  .question-text {
-    font-size: 18px; font-weight: 600; color: #1A1523;
-    line-height: 1.4; margin-bottom: 18px;
-  }
-
-  /* Answers */
+  .question-text { font-size: 18px; font-weight: 600; color: #1A1523; line-height: 1.4; margin-bottom: 18px; }
   .answers { display: flex; flex-direction: column; gap: 9px; }
   .answer-btn {
-    width: 100%; padding: 13px 15px;
-    border-radius: 10px; border: 1.5px solid #E4E4E7;
-    background: white; text-align: left;
-    font-size: 15px; color: #3F3F46; cursor: pointer;
-    transition: all 0.15s; display: flex; align-items: center;
-    gap: 11px; font-family: inherit;
+    width: 100%; padding: 13px 15px; border-radius: 10px; border: 1.5px solid #E4E4E7;
+    background: white; text-align: left; font-size: 15px; color: #3F3F46; cursor: pointer;
+    transition: all 0.15s; display: flex; align-items: center; gap: 11px; font-family: inherit;
   }
-  .answer-btn:hover  { border-color: #AFA9EC; background: #EEEDFE; color: #534AB7; }
+  .answer-btn:hover { border-color: #AFA9EC; background: #EEEDFE; color: #534AB7; }
   .answer-btn.selected { border-color: #534AB7; background: #EEEDFE; color: #534AB7; font-weight: 600; }
   .answer-letter {
     width: 28px; height: 28px; border-radius: 8px; background: #F4F4F5;
     display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 700; color: #71717A;
-    flex-shrink: 0; transition: all 0.15s;
+    font-size: 12px; font-weight: 700; color: #71717A; flex-shrink: 0; transition: all 0.15s;
   }
   .answer-btn.selected .answer-letter { background: #534AB7; color: white; }
-
-  /* Open */
   .open-input {
-    width: 100%; padding: 13px 15px;
-    border-radius: 10px; border: 1.5px solid #E4E4E7;
-    font-size: 15px; color: #1A1523; outline: none;
-    font-family: inherit; resize: none; transition: border-color 0.15s; background: white;
+    width: 100%; padding: 13px 15px; border-radius: 10px; border: 1.5px solid #E4E4E7;
+    font-size: 15px; color: #1A1523; outline: none; font-family: inherit;
+    resize: none; transition: border-color 0.15s; background: white;
   }
   .open-input:focus { border-color: #534AB7; }
-  .open-hint {
-    font-size: 12px; color: #A1A1AA; margin-top: 7px;
-    display: flex; align-items: center; gap: 4px;
-  }
-
-  /* Nav */
+  .open-hint { font-size: 12px; color: #A1A1AA; margin-top: 7px; display: flex; align-items: center; gap: 4px; }
   .nav { display: flex; gap: 10px; margin-top: 8px; }
   .btn-prev {
-    padding: 13px 18px; border-radius: 10px;
-    border: 1.5px solid #E4E4E7; background: white;
-    font-size: 15px; color: #71717A; cursor: pointer;
-    font-family: inherit; transition: all 0.15s;
-    display: flex; align-items: center; gap: 6px;
+    padding: 13px 18px; border-radius: 10px; border: 1.5px solid #E4E4E7;
+    background: white; font-size: 15px; color: #71717A; cursor: pointer;
+    font-family: inherit; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
   }
   .btn-prev:hover { border-color: #D4D4D8; }
   .btn-next {
-    flex: 1; padding: 13px; border-radius: 10px;
-    border: none; background: #534AB7; color: white;
-    font-size: 15px; font-weight: 600; cursor: pointer;
-    font-family: inherit; transition: all 0.15s;
-    display: flex; align-items: center; justify-content: center; gap: 8px;
+    flex: 1; padding: 13px; border-radius: 10px; border: none; background: #534AB7; color: white;
+    font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit;
+    transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 8px;
   }
-  .btn-next:hover    { background: #3C3489; }
+  .btn-next:hover { background: #3C3489; }
   .btn-next:disabled { background: #D4D4D8; cursor: not-allowed; }
   .btn-start {
-    width: 100%; padding: 15px; border-radius: 12px;
-    border: none; background: #534AB7; color: white;
-    font-size: 16px; font-weight: 600; cursor: pointer;
+    width: 100%; padding: 15px; border-radius: 12px; border: none;
+    background: #534AB7; color: white; font-size: 16px; font-weight: 600; cursor: pointer;
     font-family: inherit; transition: all 0.15s;
     display: flex; align-items: center; justify-content: center; gap: 10px;
   }
-  .btn-start:hover    { background: #3C3489; }
+  .btn-start:hover { background: #3C3489; }
   .btn-start:disabled { background: #D4D4D8; cursor: not-allowed; }
-
-  /* Success */
   .success-icon-wrap {
-    width: 80px; height: 80px; border-radius: 40px;
-    background: #EEEDFE; display: flex; align-items: center;
-    justify-content: center; margin: 0 auto 18px;
+    width: 80px; height: 80px; border-radius: 40px; background: #EEEDFE;
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 18px;
   }
   .success-title { font-size: 24px; font-weight: 700; color: #1A1523; margin-bottom: 10px; }
   .success-text { font-size: 15px; color: #71717A; line-height: 1.6; margin-bottom: 26px; }
   .app-cta {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 13px 26px; border-radius: 12px;
-    background: #534AB7; color: white;
-    font-size: 15px; font-weight: 600; text-decoration: none; transition: background 0.15s;
+    display: inline-flex; align-items: center; gap: 8px; padding: 13px 26px; border-radius: 12px;
+    background: #534AB7; color: white; font-size: 15px; font-weight: 600;
+    text-decoration: none; transition: background 0.15s;
   }
   .app-cta:hover { background: #3C3489; }
   .divider { height: 0.5px; background: #F4F4F5; margin: 14px 0; }
@@ -209,7 +138,6 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div class="container">
-
   <!-- Header -->
   <div class="header">
     <div class="logo-icon">
@@ -259,13 +187,14 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
         <i class="ph ph-user input-icon"></i>
         <input class="text-input" id="respondent-name" placeholder="Ex: Paulo, Marie..." />
       </div>
+      <!-- Anonymat — décoché par défaut ← -->
       <div class="anon-row" onclick="toggleAnon()">
-        <div class="anon-checkbox checked" id="anon-checkbox">
-          <i class="ph ph-check"></i>
+        <div class="anon-checkbox" id="anon-checkbox">
+          <i class="ph ph-check" style="display:none"></i>
         </div>
         <div class="anon-label">
-          <i class="ph ph-eye-slash" id="anon-icon"></i>
-          <span id="anon-label">Rester anonyme</span>
+          <i class="ph ph-eye" id="anon-icon"></i>
+          <span id="anon-label">Indiquer mon prénom</span>
         </div>
       </div>
     </div>
@@ -322,26 +251,27 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
       </a>
     </div>
   </div>
-
 </div>
+
 <script>
 const SESSION_KEY = '__SESSION_KEY__';
 const API_URL     = '__API_URL__';
 const VERSION     = '__VERSION__';
+const DIMS        = ['sociabilite','organisation','curiosite','audace','empathie','leadership','stabilite','cooperation'];
 
 // ── Badge version ──
 const VERSION_CONFIG = {
-  universel: { label: 'Famille & Amis',       color: '#534AB7', bg: '#EEEDFE', icon: 'ph-users-three' },
-  jeunes:    { label: 'Amis · 16-25 ans',     color: '#993556', bg: '#FBEAF0', icon: 'ph-hand-waving' },
-  pro:       { label: 'Collègues & Pro',       color: '#185FA5', bg: '#E6F1FB', icon: 'ph-briefcase'   },
+  universel: { label:'Famille & Amis',   color:'#534AB7', bg:'#EEEDFE', icon:'ph-users-three' },
+  jeunes:    { label:'Amis · 16-25 ans', color:'#993556', bg:'#FBEAF0', icon:'ph-hand-waving' },
+  pro:       { label:'Collègues & Pro',  color:'#185FA5', bg:'#E6F1FB', icon:'ph-briefcase'   },
 };
-const vc = VERSION_CONFIG[VERSION] || VERSION_CONFIG.universel;
+const vc    = VERSION_CONFIG[VERSION] || VERSION_CONFIG.universel;
 const badge = document.getElementById('version-badge');
 badge.style.background = vc.bg;
 badge.style.color      = vc.color;
-badge.innerHTML = `<i class="ph ${vc.icon}" style="font-size:14px"></i>${vc.label}`;
+badge.innerHTML        = `<i class="ph ${vc.icon}" style="font-size:14px"></i>${vc.label}`;
 
-// ── Questions communes ──
+// ── Questions communes Q1-Q7 ──
 const Q_COMMUNES_1_7 = [
   { id:1, text:"Dans un groupe, cette personne est plutôt :", answers:[
     { label:"Celle qui anime et lance les idées",        dims:{ leadership:2, sociabilite:2 } },
@@ -353,13 +283,13 @@ const Q_COMMUNES_1_7 = [
     { label:"Confronter directement",                    dims:{ audace:2, leadership:1 } },
     { label:"Chercher un compromis",                     dims:{ cooperation:2, empathie:1 } },
     { label:"Prendre du recul et réfléchir",             dims:{ stabilite:2, organisation:1 } },
-    { label:"Éviter et laisser passer",                  dims:{ stabilite:1, cooperation:1 } },
+    { label:"Éviter et laisser passer",                  dims:{ stabilite:1, cooperation:-1 } },
   ]},
   { id:3, text:"Quand elle rencontre quelqu'un de nouveau :", answers:[
     { label:"Elle engage la conversation facilement",    dims:{ sociabilite:2, audace:1 } },
     { label:"Elle est chaleureuse mais réservée",        dims:{ empathie:2, stabilite:1 } },
     { label:"Elle observe avant de se lancer",           dims:{ stabilite:2, curiosite:1 } },
-    { label:"Elle met du temps à s'ouvrir",              dims:{ stabilite:2, organisation:1 } },
+    { label:"Elle met du temps à s'ouvrir",              dims:{ stabilite:2, sociabilite:-1 } },
   ]},
   { id:4, text:"Sa plus grande qualité selon toi :", answers:[
     { label:"Son énergie et sa détermination",           dims:{ audace:2, leadership:2 } },
@@ -371,7 +301,7 @@ const Q_COMMUNES_1_7 = [
     { label:"Impatient(e) et impulsif(ve)",              dims:{ audace:1, stabilite:-1 } },
     { label:"Trop exigeant(e) envers lui/elle-même",    dims:{ organisation:1, stabilite:-1 } },
     { label:"Dispersé(e) et instable",                   dims:{ curiosite:1, organisation:-1 } },
-    { label:"Trop accommodant(e)",                       dims:{ cooperation:1, leadership:-1 } },
+    { label:"Trop accommodant(e)",                       dims:{ cooperation:1, audace:-1 } },
   ]},
   { id:6, text:"Face à une décision importante, elle :", answers:[
     { label:"Décide vite et assume",                     dims:{ audace:2, leadership:2 } },
@@ -387,6 +317,7 @@ const Q_COMMUNES_1_7 = [
   ]},
 ];
 
+// ── Questions communes Q12-Q15 ──
 const Q_COMMUNES_12_15 = [
   { id:12, text:"Si tu devais la décrire en un mot, ce serait :", answers:[
     { label:"Énergique",       dims:{ audace:2, sociabilite:1 } },
@@ -398,7 +329,7 @@ const Q_COMMUNES_12_15 = [
     { label:"Aime relever des défis",                    dims:{ audace:2, leadership:1 } },
     { label:"Préfère la stabilité et la sécurité",       dims:{ stabilite:2, organisation:1 } },
     { label:"S'intéresse à tout",                        dims:{ curiosite:2, sociabilite:1 } },
-    { label:"Met les autres avant elle",                 dims:{ empathie:2, cooperation:2 } },
+    { label:"Met les autres avant elle",                 dims:{ empathie:2, cooperation:1, leadership:-1 } },
   ]},
   { id:14, text:"Ce qui la rend unique selon toi :", answers:[
     { label:"Sa façon de voir les choses différemment",  dims:{ curiosite:2, audace:1 } },
@@ -415,98 +346,93 @@ const Q_COMMUNES_12_15 = [
 // ── Questions spécifiques ──
 const Q_UNIVERSEL = [
   { id:8, text:"Dans un projet, elle est plutôt :", answers:[
-    { label:"Le moteur — elle lance et impulse",          dims:{ leadership:2, audace:2 } },
-    { label:"Le pilier — elle structure et fiabilise",    dims:{ organisation:2, stabilite:2 } },
-    { label:"L'innovatrice — elle apporte des idées",     dims:{ curiosite:2, audace:1 } },
-    { label:"Le liant — elle fédère et harmonise",        dims:{ cooperation:2, empathie:2 } },
+    { label:"Le moteur — elle lance et impulse",         dims:{ leadership:2, audace:2 } },
+    { label:"Le pilier — elle structure et fiabilise",   dims:{ organisation:2, stabilite:2 } },
+    { label:"L'innovatrice — elle apporte des idées",    dims:{ curiosite:2, audace:1 } },
+    { label:"Le liant — elle fédère et harmonise",       dims:{ cooperation:2, empathie:2 } },
   ]},
   { id:9, text:"Quand les choses ne se passent pas comme prévu :", answers:[
-    { label:"Elle s'adapte et rebondit facilement",       dims:{ audace:2, stabilite:1 } },
-    { label:"Elle cherche rapidement un plan B",          dims:{ organisation:2, leadership:1 } },
-    { label:"Elle prend le temps d'analyser",             dims:{ stabilite:2, organisation:1 } },
-    { label:"Elle peut être déstabilisée un moment",      dims:{ stabilite:-1, empathie:1 } },
+    { label:"Elle s'adapte et rebondit facilement",      dims:{ audace:2, stabilite:1 } },
+    { label:"Elle cherche rapidement un plan B",         dims:{ organisation:2, leadership:1 } },
+    { label:"Elle prend le temps d'analyser",            dims:{ stabilite:2, organisation:1 } },
+    { label:"Elle peut être déstabilisée un moment",     dims:{ stabilite:-1, cooperation:1 } },
   ]},
   { id:10, text:"Dans une amitié, elle est :", answers:[
-    { label:"Présente et disponible",                     dims:{ empathie:2, cooperation:2 } },
-    { label:"Loyale et fiable",                           dims:{ organisation:1, stabilite:2 } },
-    { label:"Stimulante et inspirante",                   dims:{ curiosite:2, leadership:1 } },
-    { label:"Discrète mais profonde",                     dims:{ stabilite:2, empathie:1 } },
+    { label:"Présente et disponible",                    dims:{ empathie:2, cooperation:2 } },
+    { label:"Loyale et fiable",                          dims:{ stabilite:2, cooperation:1 } },
+    { label:"Stimulante et inspirante",                  dims:{ curiosite:2, leadership:1 } },
+    { label:"Discrète mais profonde",                    dims:{ stabilite:2, empathie:1 } },
   ]},
   { id:11, text:"Quand un proche a un problème, elle :", answers:[
-    { label:"Écoute et soutient émotionnellement",        dims:{ empathie:2, cooperation:2 } },
-    { label:"Cherche des solutions concrètes",            dims:{ organisation:2, leadership:1 } },
-    { label:"Donne son avis directement",                 dims:{ audace:2, leadership:1 } },
-    { label:"Accompagne sans imposer",                    dims:{ empathie:2, stabilite:1 } },
+    { label:"Écoute et soutient émotionnellement",       dims:{ empathie:2, cooperation:2 } },
+    { label:"Cherche des solutions concrètes",           dims:{ organisation:2, leadership:1 } },
+    { label:"Donne son avis directement",                dims:{ audace:2, leadership:1 } },
+    { label:"Accompagne sans imposer",                   dims:{ empathie:2, cooperation:1 } },
   ]},
 ];
 
 const Q_JEUNES = [
   { id:8, text:"Face à un exam ou une deadline, elle est :", answers:[
-    { label:"Organisée — elle s'y prend à l'avance",      dims:{ organisation:2, stabilite:2 } },
-    { label:"Last minute — mais elle s'en sort toujours", dims:{ audace:2, curiosite:1 } },
-    { label:"Stressée — elle cherche de l'aide",          dims:{ cooperation:2, stabilite:-1 } },
-    { label:"Cool — elle relativise facilement",          dims:{ stabilite:2, empathie:1 } },
+    { label:"Organisée — elle s'y prend à l'avance",     dims:{ organisation:2, stabilite:2 } },
+    { label:"Last minute — mais elle s'en sort toujours",dims:{ audace:2, curiosite:1 } },
+    { label:"Stressée — elle cherche de l'aide",         dims:{ cooperation:2, stabilite:-1 } },
+    { label:"Cool — elle relativise facilement",         dims:{ stabilite:2, empathie:1 } },
   ]},
   { id:9, text:"Sur ses réseaux sociaux, elle est plutôt :", answers:[
-    { label:"Active — elle poste et commente souvent",    dims:{ sociabilite:2, audace:1 } },
-    { label:"Présente mais discrète",                     dims:{ stabilite:2, empathie:1 } },
-    { label:"Elle consomme sans trop poster",             dims:{ curiosite:2, stabilite:1 } },
-    { label:"Presque absente des réseaux",                dims:{ stabilite:2, organisation:1 } },
+    { label:"Active — elle poste et commente souvent",   dims:{ sociabilite:2, audace:1 } },
+    { label:"Présente mais discrète",                    dims:{ stabilite:2, empathie:1 } },
+    { label:"Elle consomme sans trop poster",            dims:{ curiosite:2, stabilite:1 } },
+    { label:"Presque absente des réseaux",               dims:{ stabilite:2, organisation:1 } },
   ]},
   { id:10, text:"En soirée ou en sortie, elle est :", answers:[
-    { label:"Celle qui organise et s'assure que ça roule", dims:{ organisation:2, leadership:2 } },
-    { label:"Celle qui met l'ambiance pour tout le monde", dims:{ sociabilite:2, audace:2 } },
-    { label:"Celle qui reste avec ses proches",            dims:{ empathie:2, stabilite:1 } },
-    { label:"Celle qui arrive tard et repart tôt",         dims:{ stabilite:2, organisation:1 } },
+    { label:"Celle qui organise et s'assure que ça roule",dims:{ organisation:2, leadership:2 } },
+    { label:"Celle qui met l'ambiance pour tout le monde",dims:{ sociabilite:2, audace:2 } },
+    { label:"Celle qui reste avec ses proches",           dims:{ empathie:2, stabilite:1 } },
+    { label:"Celle qui arrive tard et repart tôt",        dims:{ stabilite:2, organisation:1 } },
   ]},
   { id:11, text:"Quand il y a une tension dans le groupe d'amis :", answers:[
-    { label:"Elle prend position clairement",             dims:{ audace:2, leadership:2 } },
-    { label:"Elle essaie de réconcilier tout le monde",   dims:{ cooperation:2, empathie:2 } },
-    { label:"Elle reste neutre et observe",               dims:{ stabilite:2, curiosite:1 } },
-    { label:"Elle préfère s'éloigner du conflit",         dims:{ stabilite:2, cooperation:1 } },
+    { label:"Elle prend position clairement",            dims:{ audace:2, leadership:2 } },
+    { label:"Elle essaie de réconcilier tout le monde",  dims:{ cooperation:2, empathie:2 } },
+    { label:"Elle reste neutre et observe",              dims:{ stabilite:2, curiosite:1 } },
+    { label:"Elle préfère s'éloigner du conflit",        dims:{ stabilite:2, cooperation:1 } },
   ]},
 ];
 
 const Q_PRO = [
   { id:8, text:"Dans une équipe de travail, elle est :", answers:[
-    { label:"Le moteur — elle impulse et décide",          dims:{ leadership:2, audace:2 } },
-    { label:"Le référent — fiable et rigoureux(se)",       dims:{ organisation:2, stabilite:2 } },
-    { label:"L'innovateur(trice) — plein(e) d'idées",     dims:{ curiosite:2, audace:1 } },
-    { label:"Le médiateur — elle gère les relations",      dims:{ cooperation:2, empathie:2 } },
+    { label:"Le moteur — elle impulse et décide",        dims:{ leadership:2, audace:2 } },
+    { label:"Le référent — fiable et rigoureux(se)",     dims:{ organisation:2, stabilite:2 } },
+    { label:"L'innovateur(trice) — plein(e) d'idées",   dims:{ curiosite:2, audace:1 } },
+    { label:"Le médiateur — elle gère les relations",    dims:{ cooperation:2, empathie:2 } },
   ]},
   { id:9, text:"Face à une forte pression au travail, elle :", answers:[
-    { label:"Performe mieux sous pression",                dims:{ audace:2, leadership:1 } },
-    { label:"S'organise encore mieux",                     dims:{ organisation:2, stabilite:2 } },
-    { label:"Cherche du soutien dans l'équipe",            dims:{ cooperation:2, empathie:1 } },
-    { label:"Peut être dépassée temporairement",           dims:{ stabilite:-1, empathie:1 } },
+    { label:"Performe mieux sous pression",              dims:{ audace:2, leadership:1 } },
+    { label:"S'organise encore mieux",                   dims:{ organisation:2, stabilite:2 } },
+    { label:"Cherche du soutien dans l'équipe",          dims:{ cooperation:2, empathie:1 } },
+    { label:"Peut être dépassée temporairement",         dims:{ stabilite:-1, empathie:1 } },
   ]},
   { id:10, text:"Dans sa vie professionnelle, elle est motivée par :", answers:[
-    { label:"La reconnaissance et les résultats",          dims:{ leadership:2, audace:2 } },
-    { label:"La stabilité et la sécurité",                 dims:{ stabilite:2, organisation:2 } },
-    { label:"Apprendre et progresser en permanence",       dims:{ curiosite:2, audace:1 } },
-    { label:"L'impact positif sur les autres",             dims:{ empathie:2, cooperation:2 } },
+    { label:"La reconnaissance et les résultats",        dims:{ leadership:2, audace:2 } },
+    { label:"La stabilité et la sécurité",               dims:{ stabilite:2, organisation:2 } },
+    { label:"Apprendre et progresser en permanence",     dims:{ curiosite:2, audace:1 } },
+    { label:"L'impact positif sur les autres",           dims:{ empathie:2, cooperation:2 } },
   ]},
   { id:11, text:"Face à un désaccord professionnel, elle :", answers:[
-    { label:"Défend son point de vue fermement",           dims:{ audace:2, leadership:2 } },
-    { label:"Cherche un consensus acceptable",             dims:{ cooperation:2, empathie:1 } },
-    { label:"Analyse la situation avant de réagir",        dims:{ organisation:2, stabilite:1 } },
-    { label:"Préfère éviter l'affrontement",               dims:{ stabilite:2, cooperation:1 } },
+    { label:"Défend son point de vue fermement",         dims:{ audace:2, leadership:2 } },
+    { label:"Cherche un consensus acceptable",           dims:{ cooperation:2, empathie:1 } },
+    { label:"Analyse la situation avant de réagir",      dims:{ organisation:2, stabilite:1 } },
+    { label:"Préfère éviter l'affrontement",             dims:{ stabilite:2, cooperation:1 } },
   ]},
 ];
 
-// ── Sélection de la version ──
-const Q_SPECIFIQUES = VERSION === 'jeunes' ? Q_JEUNES
-                    : VERSION === 'pro'    ? Q_PRO
-                    : Q_UNIVERSEL;
+const Q_SPECIFIQUES = VERSION === 'jeunes' ? Q_JEUNES : VERSION === 'pro' ? Q_PRO : Q_UNIVERSEL;
+const QUESTIONS     = [...Q_COMMUNES_1_7, ...Q_SPECIFIQUES, ...Q_COMMUNES_12_15];
 
-const QUESTIONS = [...Q_COMMUNES_1_7, ...Q_SPECIFIQUES, ...Q_COMMUNES_12_15];
-const DIMS = ['sociabilite','organisation','curiosite','audace','empathie','leadership','stabilite','cooperation'];
-
-// ── État ──
+// ── État — anonyme décoché par défaut ──
 let currentIndex = 0;
 let answers      = {};
 let relation     = null;
-let isAnonymous  = true;
+let isAnonymous  = false;   // ← décoché par défaut
 
 // ── Anti-doublon ──
 const STORAGE_KEY = 'rc_answered_' + SESSION_KEY;
@@ -529,9 +455,11 @@ function toggleAnon() {
   const cb    = document.getElementById('anon-checkbox');
   const icon  = document.getElementById('anon-icon');
   const label = document.getElementById('anon-label');
+  const check = cb.querySelector('i');
   cb.classList.toggle('checked', isAnonymous);
-  icon.className    = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye';
-  label.textContent = isAnonymous ? 'Rester anonyme' : 'Indiquer mon prénom';
+  check.style.display   = isAnonymous ? 'flex' : 'none';
+  icon.className        = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye';
+  label.textContent     = isAnonymous ? 'Rester anonyme' : 'Indiquer mon prénom';
 }
 
 // ── Démarrer ──
@@ -541,18 +469,16 @@ function startQuiz() {
   renderQuestion();
 }
 
-// ── Render ──
+// ── Render question ──
 function renderQuestion() {
   const q     = QUESTIONS[currentIndex];
   const total = QUESTIONS.length;
   const pct   = Math.round((currentIndex / total) * 100);
-
   document.getElementById('progress-fill').style.width = pct + '%';
   document.getElementById('progress-text').textContent = (currentIndex + 1) + ' / ' + total;
   document.getElementById('q-number').innerHTML = '<i class="ph ph-question"></i> QUESTION ' + (currentIndex + 1);
   document.getElementById('q-text').textContent = q.text;
   document.getElementById('btn-prev').style.display = currentIndex > 0 ? 'flex' : 'none';
-
   const isLast = currentIndex === total - 1;
   document.getElementById('btn-next-label').textContent = isLast ? 'Envoyer' : 'Suivant';
   document.getElementById('btn-next-icon').className    = isLast ? 'ph ph-paper-plane-tilt' : 'ph ph-arrow-right';
@@ -579,7 +505,7 @@ function renderQuestion() {
   } else {
     const letters = ['A','B','C','D'];
     q.answers.forEach((ans, i) => {
-      const btn = document.createElement('button');
+      const btn     = document.createElement('button');
       btn.className = 'answer-btn' + (answers[q.id] === i ? ' selected' : '');
       btn.innerHTML = `<span class="answer-letter">${letters[i]}</span>${ans.label}`;
       btn.onclick   = () => selectAnswer(i);
@@ -604,10 +530,11 @@ async function nextQuestion() {
   else await submitAnswers();
 }
 
-// ── Calcul vecteur ──
+// ── Calcul vecteur — normalisation 50±40 ──
 function buildVector() {
   const scores    = Object.fromEntries(DIMS.map(d => [d, 0]));
   const maxScores = Object.fromEntries(DIMS.map(d => [d, 0]));
+
   QUESTIONS.forEach(q => {
     if (q.type === 'open') return;
     const idx = answers[q.id];
@@ -617,10 +544,14 @@ function buildVector() {
       maxScores[dim] += Math.abs(value);
     });
   });
+
   const normalized = {};
   DIMS.forEach(dim => {
     const max = maxScores[dim] || 1;
-    normalized[dim] = Math.max(0, Math.min(100, Math.round(((scores[dim] + max) / (max * 2)) * 100)));
+    const raw = scores[dim] / max;           // -1 à +1
+    normalized[dim] = Math.max(5, Math.min(95,
+      Math.round(50 + raw * 40)              // amplitude 40 pts — évite 0 et 100
+    ));
   });
   return normalized;
 }
@@ -634,36 +565,34 @@ async function submitAnswers() {
   const btn = document.getElementById('btn-next');
   btn.disabled = true;
   btn.innerHTML = '<i class="ph ph-circle-notch"></i> Envoi...';
-
   try {
-
-    // Construit raw_answers — { questionId: answerIndex }
     const raw_answers = {};
     QUESTIONS.forEach(q => {
-        if (q.type !== 'open' && answers[q.id] !== undefined) {
+      if (q.type !== 'open' && answers[q.id] !== undefined) {
         raw_answers[q.id] = answers[q.id];
-        }
+      }
     });
 
+    const respondentName = document.getElementById('respondent-name').value.trim();
 
     const res = await fetch(API_URL + '/rc/respond', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_key:     SESSION_KEY,
         vector:          buildVector(),
         words:           extractWords(),
         relation:        relation || 'ami',
-        respondent_name: isAnonymous ? null : (document.getElementById('respondent-name').value.trim() || null),
+        respondent_name: isAnonymous ? null : (respondentName || null),
         is_anonymous:    isAnonymous,
         source:          'web',
-        raw_answers,     // ← ajoute
+        raw_answers,
       }),
     });
     const data = await res.json();
     if (data.success) {
       localStorage.setItem(STORAGE_KEY, '1');
-      document.getElementById('step-quiz').style.display   = 'none';
+      document.getElementById('step-quiz').style.display    = 'none';
       document.getElementById('step-success').style.display = 'block';
     } else {
       btn.disabled = false;
