@@ -464,7 +464,7 @@ function toggleAnon() {
 
   cb.classList.toggle('checked', isAnonymous);
   check.style.display      = isAnonymous ? 'flex' : 'none';
-  icon.className           = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye-slash';
+  icon.className           = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye';
   label.textContent        = isAnonymous ? 'Rester anonyme ✓' : 'Rester anonyme';
   input.style.opacity      = isAnonymous ? '0.4' : '1';
   input.style.pointerEvents = isAnonymous ? 'none' : 'auto';
