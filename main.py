@@ -232,13 +232,21 @@ def SB_HEADERS():
     }
 
 async def sb_get(table: str, params: dict) -> list:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/{table}",
-            headers=SB_HEADERS(), params=params, timeout=10.0,
-        )
-    data = r.json()
-    return data if isinstance(data, list) else []
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers=SB_HEADERS(), params=params, timeout=15.0,
+                )
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            if attempt == 0:
+                await asyncio.sleep(1)
+                continue
+            print(f"⚠️ sb_get erreur: {str(e)[:80]}")
+            return []
 
 async def sb_post(table: str, body: dict, prefer: str = "") -> list:
     headers = SB_HEADERS()
@@ -247,7 +255,7 @@ async def sb_post(table: str, body: dict, prefer: str = "") -> list:
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/{table}",
-            headers=headers, json=body, timeout=10.0,
+            headers=headers, json=body, timeout=15.0,
         )
     # ← Supabase retourne 201 avec corps vide si pas de "return=representation"
     if not r.content:
@@ -262,7 +270,7 @@ async def sb_patch(table: str, params: dict, body: dict) -> bool:
     async with httpx.AsyncClient() as client:
         r = await client.patch(
             f"{SUPABASE_URL}/rest/v1/{table}",
-            headers=SB_HEADERS(), params=params, json=body, timeout=10.0,
+            headers=SB_HEADERS(), params=params, json=body, timeout=15.0,
         )
     return r.status_code in [200, 204]
 
@@ -271,7 +279,7 @@ async def sb_delete(table: str, params: dict) -> bool:
     async with httpx.AsyncClient() as client:
         r = await client.delete(
             f"{SUPABASE_URL}/rest/v1/{table}",
-            headers=SB_HEADERS(), params=params, timeout=10.0,
+            headers=SB_HEADERS(), params=params, timeout=15.0,
         )
     return r.status_code in [200, 204]
 
