@@ -1956,12 +1956,15 @@ async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
             return {"success": False, "error": "already_invited"}
 
         # ── Vérifie que le jumeau n'a pas déjà répondu (invitation accepted) ──
+        print(f"🔍 already_accepted check: session={req.session_key} to={req.to_code}")
         already_accepted = await sb_get('rc_invitations', {
             "session_key": f"eq.{req.session_key}",
             "to_code":     f"eq.{req.to_code}",
             "status":      "eq.accepted",
             "select":      "id",
         })
+        print(f"🔍 already_accepted result: {already_accepted}")
+
         if already_accepted:
             return {"success": False, "error": "already_responded"}
 
