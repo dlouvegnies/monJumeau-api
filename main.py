@@ -1931,7 +1931,7 @@ async def rc_delete_session(session_key: str, x_app_secret: str = Header(None)):
     return {"success": True}
 
 
-@@app.post("/rc/invite")
+@app.post("/rc/invite")
 async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
     """Denis invite une connexion monJumeau (chemin B)"""
     verify_secret(x_app_secret)
