@@ -179,25 +179,28 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
         </button>
       </div>
       <div class="divider"></div>
-      <div class="section-label">
-        <i class="ph ph-user"></i>
-        Ton prénom (optionnel)
-      </div>
-      <div class="input-wrap">
-        <i class="ph ph-user input-icon"></i>
-        <input class="text-input" id="respondent-name" placeholder="Ex: Paulo, Marie..." />
-      </div>
-      <!-- Anonymat — décoché par défaut ← -->
-      <div class="anon-row" onclick="toggleAnon()">
-        <div class="anon-checkbox" id="anon-checkbox">
-          <i class="ph ph-check" style="display:none"></i>
+
+
+     <!-- Prénom visible par défaut, plus de checkbox ambiguë -->
+        <div class="section-label">
+            <i class="ph ph-user"></i>
+            Ton prénom
         </div>
-        <div class="anon-label">
-          <i class="ph ph-eye" id="anon-icon"></i>
-          <span id="anon-label">Indiquer mon prénom</span>
+        <div class="input-wrap">
+            <i class="ph ph-user input-icon"></i>
+            <input class="text-input" id="respondent-name" placeholder="Ex: Paulo, Marie..." />
         </div>
-      </div>
-    </div>
+        <div class="anon-row" onclick="toggleAnon()">
+            <div class="anon-checkbox" id="anon-checkbox">
+                <i class="ph ph-check" style="display:none"></i>
+            </div>
+            <div class="anon-label">
+                <i class="ph ph-eye-slash" id="anon-icon"></i>
+                <span id="anon-label">Rester anonyme</span>
+            </div>
+        </div>
+
+
     <button class="btn-start" id="btn-start" onclick="startQuiz()" disabled>
       <i class="ph ph-play"></i>
       Commencer le questionnaire
@@ -453,13 +456,17 @@ function selectRelation(rel, btn) {
 function toggleAnon() {
   isAnonymous = !isAnonymous;
   const cb    = document.getElementById('anon-checkbox');
+  const check = cb.querySelector('i');
   const icon  = document.getElementById('anon-icon');
   const label = document.getElementById('anon-label');
-  const check = cb.querySelector('i');
+  const input = document.getElementById('respondent-name');
+
   cb.classList.toggle('checked', isAnonymous);
-  check.style.display   = isAnonymous ? 'flex' : 'none';
-  icon.className        = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye';
-  label.textContent     = isAnonymous ? 'Rester anonyme' : 'Indiquer mon prénom';
+  check.style.display      = isAnonymous ? 'flex' : 'none';
+  icon.className           = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye-slash';
+  label.textContent        = isAnonymous ? 'Rester anonyme ✓' : 'Rester anonyme';
+  input.style.opacity      = isAnonymous ? '0.4' : '1';
+  input.style.pointerEvents = isAnonymous ? 'none' : 'auto';
 }
 
 // ── Démarrer ──
