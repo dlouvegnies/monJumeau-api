@@ -134,6 +134,9 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
   }
   .app-cta:hover { background: #3C3489; }
   .divider { height: 0.5px; background: #F4F4F5; margin: 14px 0; }
+
+  .input-wrap.disabled { opacity: 0.4; pointer-events: none; }
+
 </style>
 </head>
 <body>
@@ -183,22 +186,25 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
 
       <div class="section-label">
         <i class="ph ph-user"></i>
-        Ton prénom (optionnel)
-      </div>
-      <div class="input-wrap">
+        Ton prénom
+        </div>
+        <div class="input-wrap" id="input-wrap">
         <i class="ph ph-user input-icon"></i>
         <input class="text-input" id="respondent-name" placeholder="Ex: Paulo, Marie..." />
-      </div>
-      <!-- Anonymat — décoché par défaut ← -->
-      <div class="anon-row" onclick="toggleAnon()">
+        </div>
+        <div class="anon-row" onclick="toggleAnon()">
         <div class="anon-checkbox" id="anon-checkbox">
-          <i class="ph ph-check" style="display:none"></i>
+            <i class="ph ph-check" style="display:none"></i>
         </div>
         <div class="anon-label">
-          <i class="ph ph-eye" id="anon-icon"></i>
-          <span id="anon-label">Indiquer mon prénom</span>
+            <i class="ph ph-eye-slash" id="anon-icon"></i>
+            <span id="anon-label">Rester anonyme</span>
         </div>
-      </div>
+        </div>
+
+
+
+
     </div>
 
     
@@ -466,8 +472,8 @@ function toggleAnon() {
   check.style.display      = isAnonymous ? 'flex' : 'none';
   icon.className           = isAnonymous ? 'ph ph-eye-slash' : 'ph ph-eye';
   label.textContent        = isAnonymous ? 'Rester anonyme ✓' : 'Rester anonyme';
-  input.style.opacity      = isAnonymous ? '0.4' : '1';
-  input.style.pointerEvents = isAnonymous ? 'none' : 'auto';
+  document.getElementById('input-wrap').classList.toggle('disabled', isAnonymous);
+
 }
 
 // ── Démarrer ──
