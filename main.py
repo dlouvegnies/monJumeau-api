@@ -1931,7 +1931,7 @@ async def rc_delete_session(session_key: str, x_app_secret: str = Header(None)):
     return {"success": True}
 
 
-@app.post("/rc/invite")
+@@app.post("/rc/invite")
 async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
     """Denis invite une connexion monJumeau (chemin B)"""
     verify_secret(x_app_secret)
@@ -1944,6 +1944,16 @@ async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
         if not session:
             return {"success": False, "error": "Session introuvable"}
 
+        # ── Vérifie qu'aucune invitation pending n'existe déjà ──
+        existing = await sb_get('rc_invitations', {
+            "session_key": f"eq.{req.session_key}",
+            "to_code":     f"eq.{req.to_code}",
+            "status":      "eq.pending",
+            "select":      "id",
+        })
+        if existing:
+            return {"success": False, "error": "already_invited"}
+
         # Crée l'invitation
         data = await sb_post('rc_invitations', {
             "session_key": req.session_key,
@@ -1953,7 +1963,6 @@ async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
             "status":      "pending",
             "expires_at":  (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         }, prefer="return=representation")
-
         invitation_id = data[0]["id"] if data else None
 
         # Push notification à Paulo
@@ -1965,10 +1974,21 @@ async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
                 body='Un proche t\'invite à partager ton regard sur lui !',
                 data={'screen': 'RegardCroise', 'invitation_id': str(invitation_id)}
             )
-
         return {"success": True, "invitation_id": invitation_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
+    
+
+@app.get("/rc/invitations/sent/{from_code}")
+async def rc_invitations_sent(from_code: str):
+    try:
+        invitations = await sb_get('rc_invitations', {
+            'from_code': f'eq.{from_code}',
+            'status':    'eq.pending',
+        })
+        return { "success": True, "invitations": invitations }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/rc/invitations/{my_code}")
