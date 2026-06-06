@@ -1931,6 +1931,7 @@ async def rc_delete_session(session_key: str, x_app_secret: str = Header(None)):
     return {"success": True}
 
 
+
 @app.post("/rc/invite")
 async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
     """Denis invite une connexion monJumeau (chemin B)"""
@@ -1945,14 +1946,24 @@ async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
             return {"success": False, "error": "Session introuvable"}
 
         # ── Vérifie qu'aucune invitation pending n'existe déjà ──
-        existing = await sb_get('rc_invitations', {
+        existing_pending = await sb_get('rc_invitations', {
             "session_key": f"eq.{req.session_key}",
             "to_code":     f"eq.{req.to_code}",
             "status":      "eq.pending",
             "select":      "id",
         })
-        if existing:
+        if existing_pending:
             return {"success": False, "error": "already_invited"}
+
+        # ── Vérifie que le jumeau n'a pas déjà répondu (invitation accepted) ──
+        already_accepted = await sb_get('rc_invitations', {
+            "session_key": f"eq.{req.session_key}",
+            "to_code":     f"eq.{req.to_code}",
+            "status":      "eq.accepted",
+            "select":      "id",
+        })
+        if already_accepted:
+            return {"success": False, "error": "already_responded"}
 
         # Crée l'invitation
         data = await sb_post('rc_invitations', {
@@ -1977,7 +1988,8 @@ async def rc_invite(req: RCInviteRequest, x_app_secret: str = Header(None)):
         return {"success": True, "invitation_id": invitation_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
-    
+
+
 
 @app.get("/rc/invitations/sent/{from_code}")
 async def rc_invitations_sent(from_code: str):
