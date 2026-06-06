@@ -181,26 +181,27 @@ RC_WEBAPP_HTML = """<!DOCTYPE html>
       <div class="divider"></div>
 
 
-     <!-- Prénom visible par défaut, plus de checkbox ambiguë -->
-        <div class="section-label">
-            <i class="ph ph-user"></i>
-            Ton prénom
+      <div class="section-label">
+        <i class="ph ph-user"></i>
+        Ton prénom (optionnel)
+      </div>
+      <div class="input-wrap">
+        <i class="ph ph-user input-icon"></i>
+        <input class="text-input" id="respondent-name" placeholder="Ex: Paulo, Marie..." />
+      </div>
+      <!-- Anonymat — décoché par défaut ← -->
+      <div class="anon-row" onclick="toggleAnon()">
+        <div class="anon-checkbox" id="anon-checkbox">
+          <i class="ph ph-check" style="display:none"></i>
         </div>
-        <div class="input-wrap">
-            <i class="ph ph-user input-icon"></i>
-            <input class="text-input" id="respondent-name" placeholder="Ex: Paulo, Marie..." />
+        <div class="anon-label">
+          <i class="ph ph-eye" id="anon-icon"></i>
+          <span id="anon-label">Indiquer mon prénom</span>
         </div>
-        <div class="anon-row" onclick="toggleAnon()">
-            <div class="anon-checkbox" id="anon-checkbox">
-                <i class="ph ph-check" style="display:none"></i>
-            </div>
-            <div class="anon-label">
-                <i class="ph ph-eye-slash" id="anon-icon"></i>
-                <span id="anon-label">Rester anonyme</span>
-            </div>
-        </div>
+      </div>
+    </div>
 
-
+    
     <button class="btn-start" id="btn-start" onclick="startQuiz()" disabled>
       <i class="ph ph-play"></i>
       Commencer le questionnaire
