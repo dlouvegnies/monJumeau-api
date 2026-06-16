@@ -696,7 +696,7 @@ async def recommend(req: MessageRequest, x_app_secret: str = Header(None)):
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": req.max_tokens, "system": req.system, "messages": req.messages},
+            json={"model": "claude-sonnet-4-6", "max_tokens": req.max_tokens, "system": req.system, "messages": req.messages},
             timeout=30.0,
         )
     return response.json()
@@ -914,7 +914,7 @@ Retourne UNIQUEMENT un JSON valide :
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 2000, "messages": [{"role": "user", "content": prompt}]},
+            json={"model": "claude-sonnet-4-6", "max_tokens": 2000, "messages": [{"role": "user", "content": prompt}]},
             timeout=30.0,
         )
     data = response.json()
@@ -1213,7 +1213,7 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
                 simplify_response = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 20,
+                    json={"model": "claude-sonnet-4-6", "max_tokens": 20,
                           "messages": [{"role": "user", "content": f'Give the simplified English name (1-4 words) of this recipe for a search. Reply ONLY with the name: "{req.title}"'}]},
                     timeout=10.0,
                 )
@@ -1264,7 +1264,7 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
             claude_response = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                json={"model": "claude-sonnet-4-20250514", "max_tokens": 2000,
+                json={"model": "claude-sonnet-4-6", "max_tokens": 2000,
                       "messages": [{"role": "user", "content": translation_prompt}]},
                 timeout=30.0,
             )
@@ -1376,7 +1376,7 @@ Sélectionne les 10 articles les plus pertinents. Retourne UNIQUEMENT ce JSON :
             claude_response = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                json={"model": "claude-sonnet-4-20250514", "max_tokens": 600, "messages": [{"role": "user", "content": prompt}]},
+                json={"model": "claude-sonnet-4-6", "max_tokens": 600, "messages": [{"role": "user", "content": prompt}]},
                 timeout=20.0,
             )
             claude_text = claude_response.json()['content'][0]['text']
