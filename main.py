@@ -439,10 +439,10 @@ class PortraitTraitInput(BaseModel):
     value:      float
     confidence: float
     label_fr:   Optional[str] = None
- 
-class PortraitRequest(BaseModel):
-    traits: List[PortraitTraitInput]
 
+class PortraitRequest(BaseModel):
+    traits: list[PortraitTraitInput]
+    
 # ── ENDPOINTS REGARD CROISÉ ──
 
 
