@@ -432,6 +432,17 @@ class RCRespondInviteRequest(BaseModel):
     is_anonymous:  bool = True
     raw_answers:   Optional[dict] = None   # ← est-ce présent ?
 
+
+class PortraitTraitInput(BaseModel):
+    attribute:  str
+    dimension:  str
+    value:      float
+    confidence: float
+    label_fr:   Optional[str] = None
+ 
+class PortraitRequest(BaseModel):
+    traits: List[PortraitTraitInput]
+
 # ── ENDPOINTS REGARD CROISÉ ──
 
 
@@ -2139,3 +2150,74 @@ async def rc_webapp(session_key: str, v: str = "universel"):
         .replace("__VERSION__", version)
     )
     return HTMLResponse(content=html)
+
+
+
+
+@app.post("/portrait")
+async def generate_portrait(req: PortraitRequest, x_app_secret: str = Header(None)):
+    verify_secret(x_app_secret)
+
+    if not req.traits:
+        raise HTTPException(status_code=400, detail="Aucun trait fourni")
+
+    # ── Construction du bloc traits ──
+    by_dim = {}
+    for t in req.traits:
+        if t.dimension not in by_dim:
+            by_dim[t.dimension] = []
+        label     = t.label_fr or t.attribute
+        direction = "élevé" if t.value > 0.5 else "modéré"
+        by_dim[t.dimension].append(f"  • {label} ({direction})")
+
+    trait_lines = "\n\n".join(
+        f"{dim.upper()}\n" + "\n".join(attrs)
+        for dim, attrs in by_dim.items()
+    )
+
+    prompt = f"""Tu es un coach professionnel bienveillant et lucide. Tu as accès au modèle personnel d'un utilisateur de l'application ZEOPY.
+
+Ton rôle : rédiger un portrait narratif en 2 à 3 paragraphes (150 à 250 mots) qui aide cette personne à se reconnaître et à se comprendre.
+
+Règles impératives :
+- Ne jamais citer les noms techniques des attributs (pas de "votre score d'Ouverture", pas de "dimension motivations")
+- Ne jamais mentionner les chiffres de confiance ou les pourcentages
+- Écrire en français, à la deuxième personne du pluriel (vous)
+- Structure obligatoire :
+    § 1 — Qui vous êtes (identité de fond, traits dominants stables)
+    § 2 — Comment vous fonctionnez (mode opératoire, forces, patterns)
+    § 3 — Ce qui vous meut (aspirations, motivations profondes, sens)
+- Ton : coach professionnel humain — chaleureux mais sans complaisance, précis sans jargon
+- Ne pas flatter, ne pas psychanalyser. Des formulations directes, incarnées.
+- Le portrait doit créer un effet de reconnaissance : la personne doit penser "oui, c'est bien moi"
+
+Voici le modèle personnel de cet utilisateur, construit à partir de ses comportements et réponses :
+
+{trait_lines}
+
+Rédige le portrait narratif."""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30.0,
+        )
+
+    data     = response.json()
+    portrait = data['content'][0]['text'].strip()
+
+    return {
+        "success":     True,
+        "portrait":    portrait,
+        "trait_count": len(req.traits),
+    }
