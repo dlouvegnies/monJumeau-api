@@ -187,6 +187,47 @@ FLAGSHIP_FEEDS = {
         ('Les Echos Politique',  'https://services.lesechos.fr/rss/les-echos-politique.xml'),
     ],
 }
+
+
+
+# ── Labels lisibles ──────────────────────────────────────────
+GARDER_LABELS = {
+    "autonomy": "l'autonomie", "impact": "l'impact",
+    "human_contact": "le contact humain",
+    "responsibility": "le niveau de responsabilité",
+    "expertise": "l'expertise métier",
+    "management": "le management d'équipe",
+    "salary": "le niveau de salaire",
+    "prestige": "la reconnaissance",
+}
+EVITER_LABELS = {
+    "meetings": "les réunions en série", "hierarchy": "la hiérarchie lourde",
+    "open_space": "l'open space", "kpi_pressure": "les objectifs chiffrés permanents",
+    "travel": "les déplacements fréquents", "politics": "les jeux politiques",
+    "repetition": "les tâches répétitives", "isolation": "le travail solitaire",
+}
+LIEU_LABELS = {
+    "grande_ville": "grande ville", "ville_moyenne": "ville moyenne",
+    "campagne": "campagne / nature", "remote": "télétravail (peu importe le lieu)",
+    "flexible": "flexible selon l'opportunité",
+}
+RYTHME_LABELS = {
+    "intense": "intense et stimulant", "equilibre": "équilibré",
+    "calme": "calme et prévisible",
+}
+SALAIRE_LABELS = {
+    "pas_contrainte": "sans contrainte de salaire minimum",
+    "moins_50": "avec un minimum de 50k€",
+    "50_70": "avec un minimum de 50-70k€",
+    "70_100": "avec un minimum de 70-100k€",
+    "plus_100": "avec un minimum de 100k€+",
+}
+
+
+
+
+
+
 CATEGORIES_WITHOUT_SUPABASE = ['health', 'science']
 REJECTED_EXPIRY_DAYS = 7
 PENDING_EXPIRY_DAYS  = 14
@@ -453,6 +494,7 @@ class ResearchRequest(BaseModel):
     insights: list[ResearchInsightInput]
 
 
+
 class JobMatchInput(BaseModel):
     id:                  str
     label_fr:            str
@@ -464,11 +506,23 @@ class JobMatchInput(BaseModel):
     matching_traits:     list[str]
     active_eliminatory:  list[str]
 
+class ReconversionContext(BaseModel):
+    poste_actuel:   str = ""
+    secteur_actuel: str = ""
+    ville_actuelle: str = ""
+    garder:         list[str] = []
+    eviter:         list[str] = []
+    lieu_souhaite:  str = ""
+    rythme:         str = ""
+    salaire:        str = ""
+    autre_desir:    str = ""
+
 class JobsRequest(BaseModel):
     top_jobs:        list[JobMatchInput]
-    dominant_traits: list[str]   # labels des traits dominants de l'utilisateur
+    dominant_traits: list[str]
+    context:         ReconversionContext | None = None
 
-    
+
 # ── ENDPOINTS REGARD CROISÉ ──
 
 
@@ -2315,35 +2369,64 @@ async def generate_jobs_narrative(
     if not req.top_jobs:
         raise HTTPException(status_code=400, detail="Aucun métier fourni")
 
-    # ── Construction du bloc métiers ──
+    # ── Bloc métiers ──
     jobs_block = "\n\n".join([
         f"#{idx+1} — {j.label_fr} (compatibilité : {j.score}/100)\n"
         f"  Secteur : {j.sector}\n"
         f"  Accès : {j.reconversion_access.replace('_', ' ')}\n"
         f"  Tension principale : {j.main_tension}\n"
-        f"  Note de reconversion : {j.reconversion_note}"
+        f"  Note reconversion : {j.reconversion_note}"
         for idx, j in enumerate(req.top_jobs)
     ])
 
+    # ── Bloc traits dominants ──
     dominant_block = ", ".join(req.dominant_traits) if req.dominant_traits else "non précisés"
 
+    # ── Bloc contexte de reconversion ──
+    ctx_block = ""
+    if req.context:
+        ctx = req.context
+        ctx_parts = []
+        if ctx.poste_actuel:
+            line = f"- Situation actuelle : {ctx.poste_actuel}"
+            if ctx.secteur_actuel: line += f" dans le secteur {ctx.secteur_actuel}"
+            if ctx.ville_actuelle: line += f", basé(e) à {ctx.ville_actuelle}"
+            ctx_parts.append(line)
+        if ctx.garder:
+            labels = [GARDER_LABELS.get(g, g) for g in ctx.garder]
+            ctx_parts.append(f"- Ce qu'il/elle veut garder : {', '.join(labels)}")
+        if ctx.eviter:
+            labels = [EVITER_LABELS.get(e, e) for e in ctx.eviter]
+            ctx_parts.append(f"- Ce qu'il/elle veut absolument éviter : {', '.join(labels)}")
+        if ctx.lieu_souhaite:
+            ctx_parts.append(f"- Lieu souhaité : {LIEU_LABELS.get(ctx.lieu_souhaite, ctx.lieu_souhaite)}")
+        if ctx.rythme:
+            ctx_parts.append(f"- Rythme souhaité : {RYTHME_LABELS.get(ctx.rythme, ctx.rythme)}")
+        if ctx.salaire and ctx.salaire != "pas_contrainte":
+            ctx_parts.append(f"- Contrainte salariale : {SALAIRE_LABELS.get(ctx.salaire, ctx.salaire)}")
+        if ctx.autre_desir:
+            ctx_parts.append(f"- En ses propres mots : \"{ctx.autre_desir}\"")
+
+        if ctx_parts:
+            ctx_block = "\n\nContexte de reconversion exprimé par la personne :\n" + "\n".join(ctx_parts)
+
+    # ── Prompt ──
     prompt = f"""Tu es un conseiller en reconversion professionnelle expert, bienveillant et direct.
 
-Cette personne a un profil psychologique avec les traits dominants suivants : {dominant_block}.
+Cette personne a un profil psychologique avec les traits dominants suivants : {dominant_block}.{ctx_block}
 
-Voici les 5 métiers qui correspondent le mieux à son profil :
+Voici les 5 métiers qui correspondent le mieux à son profil psychologique :
 
 {jobs_block}
 
-Rédige une présentation personnalisée de ces 5 métiers en 3 à 4 paragraphes (200 à 280 mots) qui :
-- Commence par une phrase d'accroche qui capte l'essence du profil de cette personne (sans citer les noms de traits)
+Rédige une présentation personnalisée de ces métiers en 3 à 4 paragraphes (200 à 280 mots) qui :
+- Commence par une phrase d'accroche qui capte l'essence de ce profil ET de ce qu'il/elle cherche (si le contexte est fourni, intègre-le naturellement — "quelqu'un qui vient de X et veut Y")
 - Présente les 2-3 premiers métiers de façon narrative et engageante, en expliquant POURQUOI ils correspondent à cette personne spécifiquement
+- Si un contexte est fourni, explique comment ces métiers répondent à ses désirs concrets (lieu, rythme, ce qu'il veut éviter)
 - Mentionne la tension principale de chaque métier honnêtement — pas de marketing creux
 - Termine par une invitation à explorer, pas une injonction
 - Ton : coach expérimenté qui parle à un pair, pas un conseiller Pôle Emploi
-- Langue : français, vouvoiement
-
-Ne liste pas mécaniquement les 5 métiers. Raconte une histoire cohérente sur ce profil et ce qui pourrait l'épanouir."""
+- Langue : français, vouvoiement"""
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
