@@ -451,6 +451,23 @@ class ResearchInsightInput(BaseModel):
 
 class ResearchRequest(BaseModel):
     insights: list[ResearchInsightInput]
+
+
+class JobMatchInput(BaseModel):
+    id:                  str
+    label_fr:            str
+    sector:              str
+    score:               int
+    reconversion_access: str
+    reconversion_note:   str
+    main_tension:        str
+    matching_traits:     list[str]
+    active_eliminatory:  list[str]
+
+class JobsRequest(BaseModel):
+    top_jobs:        list[JobMatchInput]
+    dominant_traits: list[str]   # labels des traits dominants de l'utilisateur
+
     
 # ── ENDPOINTS REGARD CROISÉ ──
 
@@ -2284,4 +2301,70 @@ Ne reproduis pas les insights mot pour mot. Synthétise, relie, donne du sens.""
     return {
         "success":   True,
         "synthesis": synthesis,
+    }
+
+
+
+@app.post("/jobs")
+async def generate_jobs_narrative(
+    req: JobsRequest,
+    x_app_secret: str = Header(None),
+):
+    verify_secret(x_app_secret)
+
+    if not req.top_jobs:
+        raise HTTPException(status_code=400, detail="Aucun métier fourni")
+
+    # ── Construction du bloc métiers ──
+    jobs_block = "\n\n".join([
+        f"#{idx+1} — {j.label_fr} (compatibilité : {j.score}/100)\n"
+        f"  Secteur : {j.sector}\n"
+        f"  Accès : {j.reconversion_access.replace('_', ' ')}\n"
+        f"  Tension principale : {j.main_tension}\n"
+        f"  Note de reconversion : {j.reconversion_note}"
+        for idx, j in enumerate(req.top_jobs)
+    ])
+
+    dominant_block = ", ".join(req.dominant_traits) if req.dominant_traits else "non précisés"
+
+    prompt = f"""Tu es un conseiller en reconversion professionnelle expert, bienveillant et direct.
+
+Cette personne a un profil psychologique avec les traits dominants suivants : {dominant_block}.
+
+Voici les 5 métiers qui correspondent le mieux à son profil :
+
+{jobs_block}
+
+Rédige une présentation personnalisée de ces 5 métiers en 3 à 4 paragraphes (200 à 280 mots) qui :
+- Commence par une phrase d'accroche qui capte l'essence du profil de cette personne (sans citer les noms de traits)
+- Présente les 2-3 premiers métiers de façon narrative et engageante, en expliquant POURQUOI ils correspondent à cette personne spécifiquement
+- Mentionne la tension principale de chaque métier honnêtement — pas de marketing creux
+- Termine par une invitation à explorer, pas une injonction
+- Ton : coach expérimenté qui parle à un pair, pas un conseiller Pôle Emploi
+- Langue : français, vouvoiement
+
+Ne liste pas mécaniquement les 5 métiers. Raconte une histoire cohérente sur ce profil et ce qui pourrait l'épanouir."""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 800,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30.0,
+        )
+
+    data      = response.json()
+    narrative = data['content'][0]['text'].strip()
+
+    return {
+        "success":   True,
+        "narrative": narrative,
     }
