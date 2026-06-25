@@ -1633,6 +1633,7 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         last_embed_time[category] = datetime.now(timezone.utc)
     try:
         await sb_delete('news_articles', {"published_at": "lt.NOW() - INTERVAL '7 days'"})
+        await sb_delete('news_articles', {"published_at": "gt.NOW()"})
         print("🗑️ Vieux articles nettoyés")
     except Exception as e:
         print(f"⚠️ Nettoyage erreur: {str(e)[:50]}")
@@ -2223,6 +2224,8 @@ async def cleanup_old_requests():
             # ← Ajoute le nettoyage RC
             await sb_delete('rc_sessions', {"expires_at": "lt.NOW()"})
             print("   ✅ Sessions RC expirées supprimées")
+            await sb_delete('news_articles', {"published_at": "gt.NOW()"})
+            print("   ✅ Articles à date future supprimés")
 
         except Exception as e:
             print(f"⚠️ Erreur cleanup: {str(e)[:50]}")
