@@ -597,15 +597,42 @@ def extract_image_from_entry(entry):
     return None
 
 def parse_date(entry):
-    try:
-        if hasattr(entry, 'published'):
-            return parsedate_to_datetime(entry.published).isoformat()
-    except: pass
-    try:
-        if hasattr(entry, 'updated'):
-            return parsedate_to_datetime(entry.updated).isoformat()
-    except: pass
-    return datetime.now().isoformat()
+    """Parse la date d'un article RSS avec fallback robuste."""
+    now = datetime.now(timezone.utc)
+
+    # feedparser expose parfois published_parsed (struct_time UTC) — le plus fiable
+    for attr in ['published_parsed', 'updated_parsed']:
+        val = getattr(entry, attr, None)
+        if val:
+            try:
+                import calendar
+                dt = datetime.fromtimestamp(calendar.timegm(val), tz=timezone.utc)
+                # Guard : date aberrante (future ou trop ancienne)
+                if dt > now:
+                    continue  # on ignore les dates futures
+                if dt.year < 2000:
+                    continue  # on ignore les dates trop anciennes
+                return dt.isoformat()
+            except:
+                pass
+
+    # Fallback sur les champs texte
+    for attr in ['published', 'updated']:
+        val = getattr(entry, attr, None)
+        if val:
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt > now or dt.year < 2000:
+                    continue
+                return dt.isoformat()
+            except:
+                pass
+
+    # Dernier fallback : maintenant
+    return now.isoformat()
 
 def sort_by_date(articles):
     def sort_key(a):
