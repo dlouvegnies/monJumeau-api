@@ -1639,14 +1639,18 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         print(f"⚠️ Nettoyage erreur: {str(e)[:50]}")
     return total_embedded, total_skipped
 
+async def _embed_news_background(categories: list, hours_back: int):
+    try:
+        total_embedded, total_skipped = await _embed_news_logic(categories, hours_back)
+        print(f"✅ Embed news (background) terminé : {total_embedded} embarqués, {total_skipped} ignorés")
+    except Exception as e:
+        print(f"❌ Erreur embed_news (background): {str(e)}")
+
 @app.post("/news/embed")
 async def embed_news(req: EmbedNewsRequest, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
-    try:
-        total_embedded, total_skipped = await _embed_news_logic(req.categories, req.hours_back)
-        return {"success": True, "embedded": total_embedded, "skipped": total_skipped}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    asyncio.create_task(_embed_news_background(req.categories, req.hours_back))
+    return {"success": True, "status": "started"}
 
 @app.post("/news/semantic")
 async def semantic_news(req: SemanticNewsRequest, x_app_secret: str = Header(None)):
