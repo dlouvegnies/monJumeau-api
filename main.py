@@ -328,6 +328,14 @@ async def sb_get_one(table: str, params: dict):
     rows = await sb_get(table, {**params, "limit": "1"})
     return rows[0] if rows else None
 
+def iso_now() -> str:
+    """Timestamp UTC actuel en ISO 8601 — PostgREST attend une valeur littérale, pas une expression SQL comme NOW()."""
+    return datetime.now(timezone.utc).isoformat()
+
+def iso_days_ago(days: int) -> str:
+    """Timestamp UTC il y a N jours, en ISO 8601."""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
 # ── MODÈLES ──
 class MessageRequest(BaseModel):
     system: str
@@ -539,13 +547,17 @@ async def cleanup_old_requests():
             print("🗑️ Nettoyage automatique Supabase...")
             await sb_delete('connection_requests', {
                 "status":     "eq.rejected",
-                "updated_at": f"lt.NOW() - INTERVAL '{REJECTED_EXPIRY_DAYS} days'",
+                "updated_at": f"lt.{iso_days_ago(REJECTED_EXPIRY_DAYS)}",
             })
             await sb_delete('connection_requests', {
                 "status":     "eq.pending",
-                "created_at": f"lt.NOW() - INTERVAL '{PENDING_EXPIRY_DAYS} days'",
+                "created_at": f"lt.{iso_days_ago(PENDING_EXPIRY_DAYS)}",
             })
-            print("   ✅ Nettoyage terminé")
+            print("   ✅ Connection requests nettoyées")
+            await sb_delete('rc_sessions', {"expires_at": f"lt.{iso_now()}"})
+            print("   ✅ Sessions RC expirées supprimées")
+            await sb_delete('news_articles', {"published_at": f"gt.{iso_now()}"})
+            print("   ✅ Articles à date future supprimés")
         except Exception as e:
             print(f"⚠️ Erreur cleanup: {str(e)[:50]}")
         await asyncio.sleep(24 * 60 * 60)
@@ -1557,7 +1569,7 @@ async def upsert_article(article: dict, embedding: list, category: str):
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
-                f"{SUPABASE_URL}/rest/v1/news_articles",
+                f"{SUPABASE_URL}/rest/v1/news_articles?on_conflict=url",
                 headers={**SB_HEADERS(), "Prefer": "resolution=merge-duplicates"},
                 json={"title": article.get("title","")[:500], "description": article.get("description","")[:1000],
                       "url": article.get("url",""), "source": article.get("source",""),
@@ -1632,8 +1644,8 @@ async def _embed_news_logic(categories: list, hours_back: int = 2):
         print(f"   ✅ {category}: {stored} articles vectorisés")
         last_embed_time[category] = datetime.now(timezone.utc)
     try:
-        await sb_delete('news_articles', {"published_at": "lt.NOW() - INTERVAL '7 days'"})
-        await sb_delete('news_articles', {"published_at": "gt.NOW()"})
+        await sb_delete('news_articles', {"published_at": f"lt.{iso_days_ago(7)}"})
+        await sb_delete('news_articles', {"published_at": f"gt.{iso_now()}"})
         print("🗑️ Vieux articles nettoyés")
     except Exception as e:
         print(f"⚠️ Nettoyage erreur: {str(e)[:50]}")
@@ -1938,8 +1950,8 @@ async def connection_synced(request: Request, x_app_secret: str = Header(None)):
 async def manual_cleanup(x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
     try:
-        await sb_delete('connection_requests', {"status": "eq.rejected", "updated_at": f"lt.NOW() - INTERVAL '{REJECTED_EXPIRY_DAYS} days'"})
-        await sb_delete('connection_requests', {"status": "eq.pending",  "created_at": f"lt.NOW() - INTERVAL '{PENDING_EXPIRY_DAYS} days'"})
+        await sb_delete('connection_requests', {"status": "eq.rejected", "updated_at": f"lt.{iso_days_ago(REJECTED_EXPIRY_DAYS)}"})
+        await sb_delete('connection_requests', {"status": "eq.pending",  "created_at": f"lt.{iso_days_ago(PENDING_EXPIRY_DAYS)}"})
         return {"success": True, "message": "Nettoyage effectué"}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -2217,23 +2229,6 @@ async def rc_get_count(session_key: str):
     }
 
 
-
-
-async def cleanup_old_requests():
-    while True:
-        try:
-            print("🗑️ Nettoyage automatique Supabase...")
-            # ... code existant ...
-
-            # ← Ajoute le nettoyage RC
-            await sb_delete('rc_sessions', {"expires_at": "lt.NOW()"})
-            print("   ✅ Sessions RC expirées supprimées")
-            await sb_delete('news_articles', {"published_at": "gt.NOW()"})
-            print("   ✅ Articles à date future supprimés")
-
-        except Exception as e:
-            print(f"⚠️ Erreur cleanup: {str(e)[:50]}")
-        await asyncio.sleep(24 * 60 * 60)
 
 
 # WEBAPP
