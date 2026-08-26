@@ -2685,13 +2685,31 @@ Texte (paroles de l'acteur uniquement) :
 
 Règles impératives :
 - N'extrais QUE ce qui est explicitement énoncé — aucune déduction, aucune supposition (ex. "il a mentionné ses enfants deux fois, il doit être proche d'eux" N'EST PAS un candidat valide)
-- Cible uniquement ces catégories : IdentityDomain (localisation, rôle), RelationshipDomain (conjoint, enfants, proches — jamais de fait sur eux, seulement l'existence et la nature du lien), PreferenceDomain (goûts, avec un sujet libre), BiographicalEntry (emploi, formation, dates)
+- N'invente AUCUNE autre valeur de "target_domain"/"target_class" ni AUCUNE autre clé dans "content" que celles listées ci-dessous — c'est strict, pas indicatif
+- N'extrais JAMAIS l'âge, la date de naissance, ou tout autre élément d'état civil, même si la personne le mentionne explicitement — ce n'est pas une catégorie disponible
 - Pour chaque candidat, indique "sensitivity" parmi "standard", "elevated", "special" :
-    - "special" si le candidat porte sur un tiers au-delà de son existence/lien (ex. sa profession, ses goûts) — jamais "standard" dans ce cas
-    - "elevated" pour finance personnelle, services professionnels, employeur (BiographicalEntry.organizationLabel)
+    - "special" si le candidat porte sur un tiers au-delà de son existence/lien (ex. sa profession, ses goûts, sa date d'anniversaire) — jamais "standard" dans ce cas
+    - "elevated" pour finance personnelle, services professionnels, ou "content.organizationLabel" (employeur)
     - "standard" sinon
 - N'invente rien qui ressemble à une donnée de santé, opinion politique, religieuse, ou orientation — ignore-les complètement si mentionnées
 - Si rien de factuel et nouveau n'est dit, réponds avec un tableau vide
+
+Catégories disponibles — utilise EXACTEMENT ces combinaisons target_domain/target_class et ces clés de "content", rien d'autre :
+
+1. target_domain="IdentityDomain", target_class="Location"
+   content: {{"locationValue": "ville ou région, granularité large"}}
+
+2. target_domain="IdentityDomain", target_class="Role"
+   content: {{"roleLabel": "intitulé du rôle", "sphere": "professional" | "personal"}}
+
+3. target_domain="IdentityDomain", target_class="BiographicalEntry"
+   content: {{"entryKind": "employment" | "education" | "engagement", "organizationLabel": "nom de l'employeur/établissement", "titleLabel": "poste ou diplôme", "periodStart": "AAAA ou AAAA-MM ou null", "periodEnd": "AAAA, AAAA-MM, ou null si toujours en cours"}}
+
+4. target_domain="RelationshipDomain", target_class="Relationship"
+   content: {{"counterpartLabel": "désignation du proche (ex. 'mon épouse', 'mon fils')", "bondKind": "family" | "friendship" | "romantic" | "professional"}}
+
+5. target_domain="PreferenceDomain", target_class="Preference"
+   content: {{"topic": "sujet de la préférence, ex. 'films-series', 'sport-activites'", "preferred": "ce qui est préféré"}}
 
 Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 [{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
