@@ -2438,20 +2438,28 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises
 [{{"attribute": "...", "relevanceScore": 0.0, "rationale": "..."}}]"""
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30.0,
-        )
+        try:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=45.0,
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
 
     data = response.json()
     raw  = data['content'][0]['text'].strip()
@@ -2547,20 +2555,28 @@ Rédige un court paragraphe (300 mots maximum) qui sert de MODE D'EMPLOI au mod�
 Réponds uniquement avec le texte du bloc, sans titre, sans balises, sans commentaire autour."""
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 600,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30.0,
-        )
+        try:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 600,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=45.0,
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
 
     data  = response.json()
     block = data['content'][0]['text'].strip()
@@ -2636,21 +2652,30 @@ Règles impératives :
 Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 [{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30.0,
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=45.0,
+            )
+        if response.status_code != 200:
+            return {"success": True, "candidates": []}
+    except httpx.HTTPError:
+        # Échec silencieux volontaire (RFC-0004bis CA-11) : cette extraction
+        # tourne après que la réponse de Claude a déjà été affichée à
+        # l'acteur — un timeout ici ne doit jamais lui être montré comme
+        # une erreur, juste ne rien proposer cette fois.
+        return {"success": True, "candidates": []}
 
     data = response.json()
     raw  = data['content'][0]['text'].strip()
@@ -2706,21 +2731,29 @@ async def send_bloc_context_to_claude(
     if not req.block.strip():
         raise HTTPException(status_code=400, detail="Bloc vide")
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1500,
-                "messages": [{"role": "user", "content": req.block}],
-            },
-            timeout=30.0,
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 1500,
+                    "messages": [{"role": "user", "content": req.block}],
+                },
+                timeout=60.0,  # généreux : une réponse structurée (tableaux, catégories) prend plus que 30s
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
 
     data  = response.json()
     reply = data['content'][0]['text'].strip()
