@@ -2734,6 +2734,12 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
         # extract_json_array.
         return {"success": True, "candidates": []}
 
+    # Trace du chemin de succès — absente jusqu'ici, ce qui rendait toute
+    # extraction invisible dans Render même quand elle fonctionnait.
+    # Utile en particulier pendant la phase de test de ce pipeline.
+    summary = [f"{c.get('target_class')}({c.get('sensitivity')})" for c in candidates]
+    print(f"[capture/extract] {len(candidates)} candidat(s) extrait(s) : {summary}")
+
     return {"success": True, "candidates": candidates}
 
 
