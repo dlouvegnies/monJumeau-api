@@ -243,6 +243,52 @@ def verify_secret(x_app_secret: str = None):
     if APP_SECRET and x_app_secret != APP_SECRET:
         raise HTTPException(status_code=401, detail="Non autorisé")
 
+# ── EXTRACTION JSON TOLÉRANTE ──
+def extract_json_array(raw: str, log_prefix: str = ""):
+    """Parses a JSON array from a model's raw text response, tolerating
+    extra prose around it — Claude occasionally adds a sentence before or
+    after the array despite explicit instructions not to, which a strict
+    `json.loads` on the stripped text can't survive. Tries the strict path
+    first (cheap, works most of the time), falls back to extracting the
+    substring between the first `[` and the last `]` before giving up.
+    Raises ValueError if neither works, after logging the raw response for
+    diagnosis (Render logs otherwise show nothing on this failure mode —
+    the exact symptom that motivated this function).
+
+    ---
+
+    Analyse un tableau JSON depuis la réponse texte brute d'un modèle, en
+    tolérant du texte parasite autour — Claude ajoute parfois une phrase
+    avant ou après le tableau malgré une consigne explicite contraire, ce
+    qu'un `json.loads` strict sur le texte nettoyé ne supporte pas. Essaie
+    d'abord le chemin strict (peu coûteux, fonctionne la plupart du temps),
+    puis se rabat sur l'extraction de la sous-chaîne entre le premier `[`
+    et le dernier `]` avant d'abandonner. Lève ValueError si aucun des deux
+    ne fonctionne, après avoir loggé la réponse brute pour diagnostic
+    (Render ne montre sinon rien sur ce mode d'échec — le symptôme exact
+    qui a motivé cette fonction).
+    """
+    cleaned = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, list):
+                print(f"[{log_prefix}] Parsing strict échoué, récupéré via extraction de sous-chaîne")
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    print(f"[{log_prefix}] ÉCHEC PARSING JSON (les deux méthodes) — réponse brute : {raw[:1000]!r}")
+    raise ValueError("Aucun tableau JSON exploitable dans la réponse")
+
 # ── SQLITE — device_tokens uniquement ──
 def get_db():
     db = sqlite3.connect('gifts.db')
@@ -2454,27 +2500,24 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises
                 timeout=45.0,
             )
         except httpx.TimeoutException:
+            print("[bloc-context/select] TIMEOUT — Claude n'a pas répondu à temps")
             raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
-        except httpx.HTTPError:
+        except httpx.HTTPError as e:
+            print(f"[bloc-context/select] ERREUR RÉSEAU — {e}")
             raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
 
     if response.status_code != 200:
+        print(f"[bloc-context/select] CLAUDE A RÉPONDU {response.status_code} — {response.text[:500]}")
         raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
 
     data = response.json()
     raw  = data['content'][0]['text'].strip()
 
-    # Même prudence que côté app (ChatScreen.js) : retirer d'éventuelles
-    # balises markdown avant de parser, ne jamais faire confiance à la
-    # sortie brute d'un modèle.
-    cleaned = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-
     try:
-        ranked = json.loads(cleaned)
-        if not isinstance(ranked, list):
-            raise ValueError("La réponse n'est pas un tableau JSON")
-    except (json.JSONDecodeError, ValueError):
-        # Échec de parsing : on renvoie une liste vide plutôt qu'une
+        ranked = extract_json_array(raw, log_prefix="bloc-context/select")
+    except ValueError:
+        # Les deux méthodes de parsing ont échoué et c'est déjà loggé
+        # (extract_json_array) : on renvoie une liste vide plutôt qu'une
         # erreur 500 — l'écran de relecture affichera "aucun candidat
         # pertinent" plutôt que de casser tout le flux pour l'utilisateur.
         return {"success": True, "ranked": []}
@@ -2680,13 +2723,15 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 
     data = response.json()
     raw  = data['content'][0]['text'].strip()
-    cleaned = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
 
     try:
-        candidates = json.loads(cleaned)
-        if not isinstance(candidates, list):
-            raise ValueError("La réponse n'est pas un tableau JSON")
-    except (json.JSONDecodeError, ValueError):
+        candidates = extract_json_array(raw, log_prefix="capture/extract")
+    except ValueError:
+        # Échec silencieux volontaire (RFC-0004bis CA-11) : cette extraction
+        # tourne après que la réponse de Claude a déjà été affichée à
+        # l'acteur — un échec ici ne doit jamais lui être montré comme une
+        # erreur, juste ne rien proposer cette fois. Déjà loggé par
+        # extract_json_array.
         return {"success": True, "candidates": []}
 
     return {"success": True, "candidates": candidates}
