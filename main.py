@@ -2545,14 +2545,15 @@ async def compose_bloc_context(
 Voici des éléments du profil de cet utilisateur, jugés pertinents pour cette demande précise :
 {facts_block}
 
-Rédige un court paragraphe (300 mots maximum) qui sert de MODE D'EMPLOI au modèle qui va répondre — pas un portrait de la personne, pas une biographie. Règles impératives :
-- Voix impérative ou instructions directes ("Tiens compte de...", "Cette personne...")
-- Va droit au fait, aucune fioriture ni transition narrative
+Rédige un MODE D'EMPLOI au modèle qui va répondre (300 mots maximum) — pas un portrait de la personne, pas une biographie, pas un pavé compact. Règles impératives :
+- Structure la réponse en plusieurs points courts (liste à puces Markdown, une puce par aspect distinct : par exemple un point pour la tolérance au risque, un point pour le style de décision, un point pour l'autonomie…) — JAMAIS un paragraphe unique et compact
+- Chaque puce va droit au fait, une seule idée, aucune fioriture ni transition narrative
+- Voix impérative ou instructions directes ("Oriente vers...", "Évite de...")
 - N'invente RIEN au-delà des éléments fournis ci-dessus
 - Ne mentionne aucun chiffre de confiance ni pourcentage
-- Termine par la demande de l'utilisateur elle-même, verbatim
+- Termine par un saut de ligne, puis la demande de l'utilisateur elle-même, verbatim, seule sur sa ligne
 
-Réponds uniquement avec le texte du bloc, sans titre, sans balises, sans commentaire autour."""
+Réponds uniquement avec le texte du bloc en Markdown, sans titre, sans balises de code autour."""
 
     async with httpx.AsyncClient() as client:
         try:
@@ -2565,7 +2566,7 @@ Réponds uniquement avec le texte du bloc, sans titre, sans balises, sans commen
                 },
                 json={
                     "model": "claude-sonnet-4-6",
-                    "max_tokens": 600,
+                    "max_tokens": 800,
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=45.0,
