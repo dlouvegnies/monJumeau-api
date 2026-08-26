@@ -493,6 +493,31 @@ class PortraitRequest(BaseModel):
     traits: list[PortraitTraitInput]
 
 
+# ── Bloc de contexte — RFC-0004bis §4-6, étape 4 ──
+class BlocContextCandidateInput(BaseModel):
+    attribute: str
+    label:     str
+
+class BlocContextSelectRequest(BaseModel):
+    prompt:     str
+    candidates: list[BlocContextCandidateInput]
+
+class BlocContextSelectedInput(BaseModel):
+    attribute:   str
+    label:       str
+    rationale:   Optional[str] = None
+
+class BlocContextComposeRequest(BaseModel):
+    prompt:              str
+    selected_candidates: list[BlocContextSelectedInput]
+
+class CaptureExtractRequest(BaseModel):
+    text: str
+
+class BlocContextSendRequest(BaseModel):
+    block: str
+
+
 class ResearchInsightInput(BaseModel):
     label_fr: str
     insight:  str
@@ -2330,6 +2355,377 @@ Rédige le portrait narratif."""
         "portrait":    portrait,
         "trait_count": len(req.traits),
     }
+
+
+
+@app.post("/bloc-context/select")
+async def select_bloc_context_candidates(
+    req: BlocContextSelectRequest,
+    x_app_secret: str = Header(None),
+):
+    """Ranks the relevance of the actor's eligible portrait traits against
+    their free-text prompt, for the "Parler à une IA" flow (RFC-0004bis
+    §4-6, étape 4). Never sees the trait's value or confidence — only its
+    label — so relevance is judged on what a trait *concerns*, not on how
+    strong it currently is (same principle as /portrait, which never
+    serves a percentage to the model either).
+
+    Args:
+        req: The actor's prompt and the list of eligible candidates
+            (attribute + label only — client-side code, not this endpoint,
+            applies the sensitivity classification and the hard cap).
+        x_app_secret: Shared-secret header, checked by verify_secret like
+            every other endpoint in this file.
+
+    Returns:
+        {"success": True, "ranked": [{"attribute", "relevanceScore",
+        "rationale"}, ...]} — one entry per candidate Claude considered
+        relevant enough to rank; the client discards anything not in its
+        original candidate list, so a hallucinated attribute here is
+        harmless, not a security concern.
+
+    ---
+
+    Classe la pertinence des traits éligibles du portrait de l'acteur par
+    rapport à son prompt libre, pour le flux « Parler à une IA »
+    (RFC-0004bis §4-6, étape 4). Ne voit jamais la valeur ni la confiance
+    d'un trait — seulement son libellé — pour que la pertinence se juge sur
+    ce qu'un trait *concerne*, pas sur sa force actuelle (même principe que
+    /portrait, qui ne sert non plus jamais de pourcentage au modèle).
+
+    Args:
+        req: Le prompt de l'acteur et la liste des candidats éligibles
+            (attribut + libellé seulement — c'est le code côté client, pas
+            cet endpoint, qui applique la classification de sensibilité et
+            le plafond dur).
+        x_app_secret: En-tête de secret partagé, vérifié par verify_secret
+            comme tout autre endpoint de ce fichier.
+
+    Returns:
+        {"success": True, "ranked": [{"attribute", "relevanceScore",
+        "rationale"}, ...]} — une entrée par candidat que Claude a jugé
+        assez pertinent pour le classer ; le client écarte tout ce qui ne
+        figure pas dans sa liste de candidats d'origine, donc un attribut
+        halluciné ici est sans conséquence, pas un problème de sécurité.
+    """
+    verify_secret(x_app_secret)
+
+    if not req.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt vide")
+    if not req.candidates:
+        return {"success": True, "ranked": []}
+
+    candidates_block = "\n".join(
+        f"- {c.attribute} : {c.label}" for c in req.candidates
+    )
+
+    prompt = f"""Tu aides à sélectionner, parmi les éléments connus du profil d'une personne, ceux qui sont pertinents pour la situation qu'elle décrit.
+
+Situation décrite par la personne :
+"{req.prompt}"
+
+Éléments disponibles dans son profil (attribut technique : libellé) :
+{candidates_block}
+
+Pour CHAQUE élément que tu juges réellement pertinent pour cette situation précise (pas tous par défaut — seulement ceux qui apporteraient une vraie valeur), réponds avec :
+- "attribute" : l'identifiant technique EXACT tel que fourni ci-dessus (ne l'invente jamais, ne le modifie jamais)
+- "relevanceScore" : un nombre entre 0 et 1
+- "rationale" : une phrase courte expliquant pourquoi c'est pertinent ICI
+
+Ignore complètement les éléments qui ne sont pas pertinents pour cette situation précise — ne les inclus pas dans la réponse.
+
+Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises markdown :
+[{{"attribute": "...", "relevanceScore": 0.0, "rationale": "..."}}]"""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30.0,
+        )
+
+    data = response.json()
+    raw  = data['content'][0]['text'].strip()
+
+    # Même prudence que côté app (ChatScreen.js) : retirer d'éventuelles
+    # balises markdown avant de parser, ne jamais faire confiance à la
+    # sortie brute d'un modèle.
+    cleaned = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+
+    try:
+        ranked = json.loads(cleaned)
+        if not isinstance(ranked, list):
+            raise ValueError("La réponse n'est pas un tableau JSON")
+    except (json.JSONDecodeError, ValueError):
+        # Échec de parsing : on renvoie une liste vide plutôt qu'une
+        # erreur 500 — l'écran de relecture affichera "aucun candidat
+        # pertinent" plutôt que de casser tout le flux pour l'utilisateur.
+        return {"success": True, "ranked": []}
+
+    return {"success": True, "ranked": ranked}
+
+
+
+@app.post("/bloc-context/compose")
+async def compose_bloc_context(
+    req: BlocContextComposeRequest,
+    x_app_secret: str = Header(None),
+):
+    """Composes the final text block for the "Parler à une IA" flow
+    (RFC-0004bis §5-6, étape 6) — the second inference, run only after the
+    actor has confirmed which candidates to include (RelectureCandidatsScreen).
+    Produces a "mode d'emploi" addressed to whichever model receives it,
+    not a narrative portrait: imperative voice, capped length, no
+    third-party framing device.
+
+    Args:
+        req: The actor's original prompt and the candidates they kept
+            after review (attribute, label, and the rationale from the
+            first inference, reused here for continuity rather than
+            recomputed).
+        x_app_secret: Shared-secret header, checked by verify_secret.
+
+    Returns:
+        {"success": True, "block": str} — ready to copy or send onward;
+        this endpoint never stores it, the client decides what happens
+        next (copy, or a direct API call to an external model).
+
+    ---
+
+    Compose le bloc de texte final du flux « Parler à une IA »
+    (RFC-0004bis §5-6, étape 6) — la deuxième inférence, exécutée
+    seulement après que l'acteur a confirmé quels candidats retenir
+    (RelectureCandidatsScreen). Produit un « mode d'emploi » adressé au
+    modèle qui le recevra, pas un portrait narratif : voix impérative,
+    longueur plafonnée, aucun artifice de présentation à un tiers.
+
+    Args:
+        req: Le prompt d'origine de l'acteur et les candidats retenus
+            après relecture (attribut, libellé, et la justification de la
+            première inférence, réutilisée ici par continuité plutôt que
+            recalculée).
+        x_app_secret: En-tête de secret partagé, vérifié par verify_secret.
+
+    Returns:
+        {"success": True, "block": str} — prêt à copier ou à transmettre ;
+        cet endpoint ne le stocke jamais, c'est le client qui décide de la
+        suite (copie, ou appel API direct vers un modèle externe).
+    """
+    verify_secret(x_app_secret)
+
+    if not req.selected_candidates:
+        raise HTTPException(status_code=400, detail="Aucun candidat sélectionné")
+
+    facts_block = "\n".join(
+        f"- {c.label}" + (f" ({c.rationale})" if c.rationale else "")
+        for c in req.selected_candidates
+    )
+
+    prompt = f"""Tu rédiges un bloc de contexte à l'intention d'un modèle de langage qui va recevoir la demande suivante d'un utilisateur :
+
+"{req.prompt}"
+
+Voici des éléments du profil de cet utilisateur, jugés pertinents pour cette demande précise :
+{facts_block}
+
+Rédige un court paragraphe (300 mots maximum) qui sert de MODE D'EMPLOI au modèle qui va répondre — pas un portrait de la personne, pas une biographie. Règles impératives :
+- Voix impérative ou instructions directes ("Tiens compte de...", "Cette personne...")
+- Va droit au fait, aucune fioriture ni transition narrative
+- N'invente RIEN au-delà des éléments fournis ci-dessus
+- Ne mentionne aucun chiffre de confiance ni pourcentage
+- Termine par la demande de l'utilisateur elle-même, verbatim
+
+Réponds uniquement avec le texte du bloc, sans titre, sans balises, sans commentaire autour."""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 600,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30.0,
+        )
+
+    data  = response.json()
+    block = data['content'][0]['text'].strip()
+
+    return {"success": True, "block": block}
+
+
+
+@app.post("/capture/extract")
+async def extract_capture_candidates(
+    req: CaptureExtractRequest,
+    x_app_secret: str = Header(None),
+):
+    """Extracts candidate contextual facts (identity, relationships,
+    biographical entries, preferences) from the actor's own words only
+    (RFC-0004bis §4, CA-1: never infers beyond what was explicitly stated).
+    The caller (`services/captureExtraction.js`) has already filtered the
+    input down to the actor's turns before this text ever reaches here —
+    this endpoint has no way to enforce CA-3ter itself, it trusts its input.
+
+    Args:
+        text: Concatenated text of the actor's own conversation turns.
+        x_app_secret: Shared-secret header, checked by verify_secret.
+
+    Returns:
+        {"success": True, "candidates": [{"target_domain", "target_class",
+        "content", "sensitivity", "extraction_confidence"}, ...]} — an
+        empty list is a normal, valid result (nothing worth proposing),
+        not an error.
+
+    ---
+
+    Extrait des candidats de faits contextuels (identité, relations,
+    épisodes biographiques, préférences) uniquement à partir des propres
+    mots de l'acteur (RFC-0004bis §4, CA-1 : aucune inférence au-delà de
+    ce qui a été explicitement énoncé). L'appelant
+    (`services/captureExtraction.js`) a déjà filtré l'entrée aux seuls
+    tours de l'acteur avant que ce texte n'arrive ici — cet endpoint n'a
+    aucun moyen d'imposer CA-3ter lui-même, il fait confiance à son entrée.
+
+    Args:
+        text: Texte concaténé des tours de conversation de l'acteur seul.
+        x_app_secret: En-tête de secret partagé, vérifié par verify_secret.
+
+    Returns:
+        {"success": True, "candidates": [{"target_domain", "target_class",
+        "content", "sensitivity", "extraction_confidence"}, ...]} — une
+        liste vide est un résultat normal et valide (rien à proposer), pas
+        une erreur.
+    """
+    verify_secret(x_app_secret)
+
+    if not req.text.strip():
+        return {"success": True, "candidates": []}
+
+    prompt = f"""Tu identifies des faits factuels et contextuels que cette personne a dits sur elle-même, à partir de ses propres mots ci-dessous.
+
+Texte (paroles de l'acteur uniquement) :
+\"\"\"
+{req.text}
+\"\"\"
+
+Règles impératives :
+- N'extrais QUE ce qui est explicitement énoncé — aucune déduction, aucune supposition (ex. "il a mentionné ses enfants deux fois, il doit être proche d'eux" N'EST PAS un candidat valide)
+- Cible uniquement ces catégories : IdentityDomain (localisation, rôle), RelationshipDomain (conjoint, enfants, proches — jamais de fait sur eux, seulement l'existence et la nature du lien), PreferenceDomain (goûts, avec un sujet libre), BiographicalEntry (emploi, formation, dates)
+- Pour chaque candidat, indique "sensitivity" parmi "standard", "elevated", "special" :
+    - "special" si le candidat porte sur un tiers au-delà de son existence/lien (ex. sa profession, ses goûts) — jamais "standard" dans ce cas
+    - "elevated" pour finance personnelle, services professionnels, employeur (BiographicalEntry.organizationLabel)
+    - "standard" sinon
+- N'invente rien qui ressemble à une donnée de santé, opinion politique, religieuse, ou orientation — ignore-les complètement si mentionnées
+- Si rien de factuel et nouveau n'est dit, réponds avec un tableau vide
+
+Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
+[{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30.0,
+        )
+
+    data = response.json()
+    raw  = data['content'][0]['text'].strip()
+    cleaned = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+
+    try:
+        candidates = json.loads(cleaned)
+        if not isinstance(candidates, list):
+            raise ValueError("La réponse n'est pas un tableau JSON")
+    except (json.JSONDecodeError, ValueError):
+        return {"success": True, "candidates": []}
+
+    return {"success": True, "candidates": candidates}
+
+
+
+@app.post("/bloc-context/send")
+async def send_bloc_context_to_claude(
+    req: BlocContextSendRequest,
+    x_app_secret: str = Header(None),
+):
+    """Sends the composed context block to Claude using ZEOPY's own API
+    key (same key as every other endpoint in this file) — the "envoyer à
+    Claude" step of the flow, without BYOK: the actor uses the app's
+    existing Claude access rather than supplying their own key.
+
+    Args:
+        req: The composed block (already ends with the actor's own
+            request, per /bloc-context/compose's prompt design).
+        x_app_secret: Shared-secret header, checked by verify_secret.
+
+    Returns:
+        {"success": True, "reply": str} — Claude's response text.
+
+    ---
+
+    Envoie le bloc de contexte composé à Claude en utilisant la propre clé
+    API de ZEOPY (la même que tous les autres endpoints de ce fichier) —
+    l'étape « envoyer à Claude » du flux, sans BYOK : l'acteur utilise
+    l'accès Claude déjà existant de l'app plutôt que de fournir sa propre
+    clé.
+
+    Args:
+        req: Le bloc composé (se termine déjà par la demande de l'acteur,
+            par construction du prompt de /bloc-context/compose).
+        x_app_secret: En-tête de secret partagé, vérifié par verify_secret.
+
+    Returns:
+        {"success": True, "reply": str} — le texte de la réponse de Claude.
+    """
+    verify_secret(x_app_secret)
+
+    if not req.block.strip():
+        raise HTTPException(status_code=400, detail="Bloc vide")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1500,
+                "messages": [{"role": "user", "content": req.block}],
+            },
+            timeout=30.0,
+        )
+
+    data  = response.json()
+    reply = data['content'][0]['text'].strip()
+
+    return {"success": True, "reply": reply}
 
 
 
