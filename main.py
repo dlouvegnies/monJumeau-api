@@ -2476,7 +2476,7 @@ Situation décrite par la personne :
 Pour CHAQUE élément que tu juges réellement pertinent pour cette situation précise (pas tous par défaut — seulement ceux qui apporteraient une vraie valeur), réponds avec :
 - "attribute" : l'identifiant technique EXACT tel que fourni ci-dessus (ne l'invente jamais, ne le modifie jamais)
 - "relevanceScore" : un nombre entre 0 et 1
-- "rationale" : une phrase courte expliquant pourquoi c'est pertinent ICI
+- "rationale" : MAXIMUM 12 MOTS — un fragment, pas une phrase complète avec sujet/verbe (ex. "expérience de direction, oriente le niveau de poste" — pas "Son expérience de directeur général est son atout principal et oriente directement...")
 
 Ignore complètement les éléments qui ne sont pas pertinents pour cette situation précise — ne les inclus pas dans la réponse.
 
@@ -2494,7 +2494,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises
                 },
                 json={
                     "model": "claude-sonnet-4-6",
-                    "max_tokens": 1000,
+                    "max_tokens": 2000,
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=45.0,
@@ -2512,6 +2512,12 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises
 
     data = response.json()
     raw  = data['content'][0]['text'].strip()
+    if data.get('stop_reason') == 'max_tokens':
+        # Diagnostic immédiat plutôt que de deviner depuis la réponse
+        # brute tronquée — c'est exactement ce qui a produit l'échec de
+        # parsing du 26/08 (5 candidats, rationale trop verbeuse, 1000
+        # tokens insuffisants).
+        print(f"[bloc-context/select] TRONCATURE max_tokens — réponse coupée avant la fin, {len(raw)} caractères reçus")
 
     try:
         ranked = extract_json_array(raw, log_prefix="bloc-context/select")
