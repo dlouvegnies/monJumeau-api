@@ -2750,12 +2750,19 @@ async def extract_capture_candidates(
     req: CaptureExtractRequest,
     x_app_secret: str = Header(None),
 ):
-    """Extracts candidate contextual facts (identity, relationships,
-    biographical entries, preferences) from the actor's own words only
+    """Extracts candidate contextual facts — about the actor themselves,
+    or about the people around them (RelationshipFact: location, age,
+    hobby, education, employment) — from the actor's own words only
     (RFC-0004bis §4, CA-1: never infers beyond what was explicitly stated).
     The caller (`services/captureExtraction.js`) has already filtered the
     input down to the actor's turns before this text ever reaches here —
     this endpoint has no way to enforce CA-3ter itself, it trusts its input.
+
+    The `sensitivity` this endpoint returns for RelationshipFact rows is
+    advisory only — Denis decided (conversation 31/08/2026) that a hard
+    floor by `factKind`, coded client-side in captureExtraction.js, is
+    safer than trusting classification for facts about someone who never
+    consented to being in ZEOPY's data at all.
 
     Args:
         text: Concatenated text of the actor's own conversation turns.
@@ -2769,13 +2776,21 @@ async def extract_capture_candidates(
 
     ---
 
-    Extrait des candidats de faits contextuels (identité, relations,
-    épisodes biographiques, préférences) uniquement à partir des propres
-    mots de l'acteur (RFC-0004bis §4, CA-1 : aucune inférence au-delà de
-    ce qui a été explicitement énoncé). L'appelant
-    (`services/captureExtraction.js`) a déjà filtré l'entrée aux seuls
-    tours de l'acteur avant que ce texte n'arrive ici — cet endpoint n'a
-    aucun moyen d'imposer CA-3ter lui-même, il fait confiance à son entrée.
+    Extrait des candidats de faits contextuels — sur l'acteur lui-même, ou
+    sur ses proches (RelationshipFact : localisation, âge, loisir, études,
+    emploi) — uniquement à partir des propres mots de l'acteur (RFC-0004bis
+    §4, CA-1 : aucune inférence au-delà de ce qui a été explicitement
+    énoncé). L'appelant (`services/captureExtraction.js`) a déjà filtré
+    l'entrée aux seuls tours de l'acteur avant que ce texte n'arrive ici —
+    cet endpoint n'a aucun moyen d'imposer CA-3ter lui-même, il fait
+    confiance à son entrée.
+
+    La `sensitivity` renvoyée ici pour les lignes RelationshipFact n'est
+    qu'indicative — Denis a décidé (conversation du 31/08/2026) qu'un
+    plancher dur par `factKind`, codé côté client dans
+    captureExtraction.js, est plus sûr qu'une confiance dans la
+    classification pour des faits sur quelqu'un qui n'a jamais consenti à
+    figurer dans les données de ZEOPY.
 
     Args:
         text: Texte concaténé des tours de conversation de l'acteur seul.
@@ -2792,7 +2807,7 @@ async def extract_capture_candidates(
     if not req.text.strip():
         return {"success": True, "candidates": []}
 
-    prompt = f"""Tu identifies des faits factuels et contextuels que cette personne a dits sur elle-même, à partir de ses propres mots ci-dessous.
+    prompt = f"""Tu identifies des faits factuels et contextuels que cette personne a dits sur elle-même ou sur ses proches, à partir de ses propres mots ci-dessous.
 
 Texte (paroles de l'acteur uniquement) :
 \"\"\"
@@ -2800,14 +2815,15 @@ Texte (paroles de l'acteur uniquement) :
 \"\"\"
 
 Règles impératives :
-- N'extrais QUE ce qui est explicitement énoncé — aucune déduction, aucune supposition (ex. "il a mentionné ses enfants deux fois, il doit être proche d'eux" N'EST PAS un candidat valide)
+- N'extrais QUE ce qui est explicitement énoncé — aucune déduction, aucune supposition (ex. "il a mentionné ses enfants deux fois, il doit être proche d'eux" N'EST PAS un candidat valide ; "il a joué au foot avec son fils" ne permet PAS de déduire que son fils aime le foot — seul le moment partagé est un fait)
+- Une phrase peut contenir PLUSIEURS faits distincts, sur des sujets différents (l'acteur lui-même ET un proche) — extrais-les comme des candidats séparés, chacun dans sa propre catégorie, plutôt que de n'en garder qu'un
 - N'invente AUCUNE autre valeur de "target_domain"/"target_class" ni AUCUNE autre clé dans "content" que celles listées ci-dessous — c'est strict, pas indicatif
-- N'extrais JAMAIS l'âge, la date de naissance, ou tout autre élément d'état civil, même si la personne le mentionne explicitement — ce n'est pas une catégorie disponible
-- Pour chaque candidat, indique "sensitivity" parmi "standard", "elevated", "special" :
+- N'extrais JAMAIS l'âge, la date de naissance, ou tout autre élément d'état civil DE L'ACTEUR LUI-MÊME, même si la personne le mentionne explicitement — ce n'est pas une catégorie disponible pour lui. Pour un PROCHE en revanche, l'âge (catégorie 6 ci-dessous, "age") est autorisé
+- Pour chaque candidat, indique "sensitivity" parmi "standard", "elevated", "special" — SAUF pour la catégorie 6 (RelationshipFact), où ce champ est ignoré et recalculé ailleurs : indique-le quand même à titre indicatif, "elevated" par défaut
     - "special" si le candidat porte sur un tiers au-delà de son existence/lien (ex. sa profession, ses goûts, sa date d'anniversaire) — jamais "standard" dans ce cas
     - "elevated" pour finance personnelle, services professionnels, ou "content.organizationLabel" (employeur)
     - "standard" sinon
-- N'invente rien qui ressemble à une donnée de santé, opinion politique, religieuse, ou orientation — ignore-les complètement si mentionnées
+- N'invente rien qui ressemble à une donnée de santé, opinion politique, religieuse, ou orientation — ignore-les complètement si mentionnées, y compris à propos d'un proche
 - Si rien de factuel et nouveau n'est dit, réponds avec un tableau vide
 
 Catégories disponibles — utilise EXACTEMENT ces combinaisons target_domain/target_class et ces clés de "content", rien d'autre :
@@ -2822,10 +2838,13 @@ Catégories disponibles — utilise EXACTEMENT ces combinaisons target_domain/ta
    content: {{"entryKind": "employment" | "education" | "engagement", "organizationLabel": "nom de l'employeur/établissement", "titleLabel": "poste ou diplôme", "periodStart": "AAAA ou AAAA-MM ou null", "periodEnd": "AAAA, AAAA-MM, ou null si toujours en cours"}}
 
 4. target_domain="RelationshipDomain", target_class="Relationship"
-   content: {{"counterpartLabel": "désignation du proche (ex. 'mon épouse', 'mon fils')", "bondKind": "family" | "friendship" | "romantic" | "professional"}}
+   content: {{"counterpartLabel": "désignation du proche, la plus spécifique possible — privilégie un prénom s'il est donné (ex. 'Léon') plutôt qu'une désignation générique ('mon fils') si les deux apparaissent dans le texte, pour ne pas confondre deux proches du même type de lien", "bondKind": "family" | "friendship" | "romantic" | "professional"}}
 
 5. target_domain="PreferenceDomain", target_class="Preference"
-   content: {{"topic": "sujet de la préférence, ex. 'films-series', 'sport-activites'", "preferred": "ce qui est préféré"}}
+   content: {{"topic": "sujet de la préférence, ex. 'films-series', 'sport-activites', 'ressourcement'", "preferred": "ce qui est préféré — inclut les préférences de l'acteur qui se manifestent à travers un moment partagé avec un proche (ex. jouer avec son fils le ressource), pas seulement ses goûts en solo"}}
+
+6. target_domain="RelationshipDomain", target_class="RelationshipFact"
+   content: {{"counterpartLabel": "même désignation que la catégorie 4, pour rattacher ce fait à la bonne personne", "factKind": "location" | "age" | "hobby" | "education" | "employment", "value": "le fait lui-même, bref, dans les mots de l'acteur (ex. '8 ans', 'aime le foot', 'études d'ingénieur')"}}
 
 Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 [{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
