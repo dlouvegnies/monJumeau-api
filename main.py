@@ -563,6 +563,9 @@ class CaptureExtractRequest(BaseModel):
 class BlocContextSendRequest(BaseModel):
     block: str
 
+class PromptReformulateRequest(BaseModel):
+    prompt: str
+
 
 class ResearchInsightInput(BaseModel):
     label_fr: str
@@ -2632,6 +2635,113 @@ Réponds uniquement avec le texte du bloc en Markdown, sans titre, sans balises 
     block = data['content'][0]['text'].strip()
 
     return {"success": True, "block": block}
+
+
+
+@app.post("/prompt/reformulate")
+async def reformulate_prompt(
+    req: PromptReformulateRequest,
+    x_app_secret: str = Header(None),
+):
+    """Reformulates the actor's own free-text prompt for clarity and
+    structure only — étape 3bis (optionnelle) du flux « Parler à une IA »,
+    proposée par Denis en conversation le 31/08/2026. Deliberately narrow
+    in scope: touches only the actor's own words, never mixed with any
+    portrait data (that mixing happens later, at /bloc-context/compose,
+    only after the actor has reviewed and confirmed what to include).
+
+    Never silent: the client shows original and reformulated side by
+    side and the actor explicitly picks which one continues the flow —
+    this endpoint has no way to enforce that UI contract itself, it
+    trusts the caller (ParlerAUneIAScreen.js) the same way
+    /capture/extract trusts its caller on role-filtering.
+
+    Args:
+        req: The actor's original free-text prompt, verbatim.
+        x_app_secret: Shared-secret header, checked by verify_secret.
+
+    Returns:
+        {"success": True, "reformulated": str} — a rewritten version of
+        the same prompt: clearer, better structured, same intent, same
+        facts, no addition. Never tailored to a specific downstream
+        model (Claude, GPT, Mistral) — the whole point is that it stays
+        useful regardless of which one eventually receives it.
+
+    ---
+
+    Reformule le prompt libre de l'acteur, uniquement pour la clarté et
+    la structure — étape 3bis (optionnelle) du flux « Parler à une IA »,
+    proposée par Denis en conversation le 31/08/2026. Volontairement
+    étroite dans son périmètre : ne touche qu'aux mots de l'acteur,
+    jamais mélangés à une donnée du portrait (ce mélange a lieu plus
+    tard, à /bloc-context/compose, seulement après que l'acteur a relu
+    et confirmé quoi inclure).
+
+    Jamais silencieux : le client affiche l'original et la version
+    reformulée côte à côte, et l'acteur choisit explicitement laquelle
+    continue le flux — cet endpoint n'a aucun moyen d'imposer ce contrat
+    d'interface lui-même, il fait confiance à son appelant
+    (ParlerAUneIAScreen.js), comme /capture/extract fait confiance au
+    sien pour le filtrage de rôle.
+
+    Args:
+        req: Le prompt libre d'origine de l'acteur, verbatim.
+        x_app_secret: En-tête de secret partagé, vérifié par verify_secret.
+
+    Returns:
+        {"success": True, "reformulated": str} — une version réécrite du
+        même prompt : plus claire, mieux structurée, même intention,
+        mêmes faits, aucun ajout. Jamais adaptée à un modèle destinataire
+        particulier (Claude, GPT, Mistral) — tout l'intérêt est qu'elle
+        reste utile quel que soit celui qui la recevra finalement.
+    """
+    verify_secret(x_app_secret)
+
+    if not req.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt vide")
+
+    prompt = f"""Voici une demande écrite par une personne, parfois dictée à l'oral (hésitations, répétitions, phrases mal formées possibles) :
+
+"{req.prompt}"
+
+Réécris cette demande pour la rendre plus claire et mieux structurée. Règles impératives :
+- N'ajoute AUCUNE information, contrainte ou nuance qui n'était pas déjà présente
+- Ne change RIEN à l'intention ni aux faits exprimés — seulement la forme
+- Supprime les hésitations, répétitions et scories de dictée si présentes
+- Ne l'adapte à AUCUN modèle de langage en particulier (pas de balises, pas de format propre à un outil) — le résultat doit rester utile tel quel, quel que soit le destinataire final
+- Garde la même langue, le même registre (tutoiement/vouvoiement) que l'original
+- Si la demande est déjà claire et bien formée, renvoie-la quasiment telle quelle — ne réécris pas pour le principe
+
+Réponds UNIQUEMENT avec le texte reformulé, sans commentaire, sans guillemets autour."""
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 500,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=30.0,
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
+
+    data         = response.json()
+    reformulated = data['content'][0]['text'].strip()
+
+    return {"success": True, "reformulated": reformulated}
 
 
 
