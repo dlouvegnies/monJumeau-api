@@ -559,6 +559,13 @@ class BlocContextComposeRequest(BaseModel):
 
 class CaptureExtractRequest(BaseModel):
     text: str
+    # Ajouté 31/08/2026 (conversation Denis) — point 2 de la correction
+    # anti-doublon : désignations déjà confirmées d'un proche (ex.
+    # "Léon (famille)"), pour que Claude réutilise le même nom au lieu
+    # d'en reformuler un nouveau à chaque extraction ("Léon" une fois,
+    # "mon fils Léon" une autre, "mes enfants (4)" une troisième — les
+    # trois ont été observées en usage réel). Optionnel, jamais requis.
+    known_relationships: Optional[list[str]] = None
 
 class BlocContextSendRequest(BaseModel):
     block: str
@@ -2764,8 +2771,26 @@ async def extract_capture_candidates(
     safer than trusting classification for facts about someone who never
     consented to being in ZEOPY's data at all.
 
+    `req.known_relationships` (added 31/08/2026, conversation Denis, point
+    2 of the anti-duplicate fix): a short list of ALREADY-CONFIRMED
+    relationship names/labels only — e.g. `["Léon (famille)", "ma femme
+    (famille)"]` — never the RelationshipFact rows built on top of them
+    (age, hobby, education...). Sent so Claude reuses the same
+    `counterpartLabel` for a person already known instead of reformulating
+    a new one each time (observed in real usage: "Léon", "mon fils Léon",
+    and "mes enfants (4)" all extracted separately for the same person).
+    This is the first time this endpoint sends anything beyond the raw
+    prompt text — worth noting explicitly, even though a name and bond
+    type were already the one thing CA-2 treats as not needing protection
+    (`'special' si le candidat porte sur un tiers au-delà de son
+    existence/lien`) — the *scope* sent here is new, not the *sensitivity
+    tier* of what's in it.
+
     Args:
         text: Concatenated text of the actor's own conversation turns.
+        known_relationships: Optional list of already-confirmed
+            relationship labels (name + bond type only), for continuity
+            of naming across extractions.
         x_app_secret: Shared-secret header, checked by verify_secret.
 
     Returns:
@@ -2792,8 +2817,27 @@ async def extract_capture_candidates(
     classification pour des faits sur quelqu'un qui n'a jamais consenti à
     figurer dans les données de ZEOPY.
 
+    `req.known_relationships` (ajouté le 31/08/2026, conversation Denis,
+    point 2 de la correction anti-doublon) : une courte liste de noms/liens
+    DÉJÀ CONFIRMÉS uniquement — ex. `["Léon (famille)", "ma femme
+    (famille)"]` — jamais les lignes RelationshipFact construites dessus
+    (âge, loisir, études...). Envoyée pour que Claude réutilise le même
+    `counterpartLabel` pour une personne déjà connue plutôt que d'en
+    reformuler un nouveau à chaque fois (observé en usage réel : "Léon",
+    "mon fils Léon" et "mes enfants (4)" tous extraits séparément pour la
+    même personne). C'est la première fois que cet endpoint envoie autre
+    chose que le texte brut du prompt — à noter explicitement, même si un
+    nom et un type de lien étaient déjà la seule chose que CA-2 traite
+    comme n'ayant pas besoin de protection (« 'special' si le candidat
+    porte sur un tiers au-delà de son existence/lien ») — c'est le
+    *périmètre* envoyé ici qui est nouveau, pas le *niveau de sensibilité*
+    de ce qu'il contient.
+
     Args:
         text: Texte concaténé des tours de conversation de l'acteur seul.
+        known_relationships: Liste optionnelle de désignations de proches
+            déjà confirmées (nom + type de lien seulement), pour la
+            continuité des noms d'une extraction à l'autre.
         x_app_secret: En-tête de secret partagé, vérifié par verify_secret.
 
     Returns:
@@ -2807,12 +2851,24 @@ async def extract_capture_candidates(
     if not req.text.strip():
         return {"success": True, "candidates": []}
 
+    # Point 2 de la correction anti-doublon (31/08/2026, conversation
+    # Denis) — voir le docstring de la classe CaptureExtractRequest et le
+    # commentaire sur known_relationships_block plus bas pour le détail
+    # de ce qui sort réellement du téléphone ici.
+    known_relationships_block = ""
+    if req.known_relationships:
+        known_list = "\n".join(f"- {r}" for r in req.known_relationships)
+        known_relationships_block = f"""
+
+Proches déjà connus dans le profil de cette personne — si le texte parle de l'un d'eux, réutilise EXACTEMENT la même désignation ci-dessous plutôt que d'en reformuler une nouvelle (ex. si "Léon (famille)" est listé et que le texte dit "mon fils", utilise "Léon" comme counterpartLabel, pas "mon fils") :
+{known_list}"""
+
     prompt = f"""Tu identifies des faits factuels et contextuels que cette personne a dits sur elle-même ou sur ses proches, à partir de ses propres mots ci-dessous.
 
 Texte (paroles de l'acteur uniquement) :
 \"\"\"
 {req.text}
-\"\"\"
+\"\"\"{known_relationships_block}
 
 Règles impératives :
 - N'extrais QUE ce qui est explicitement énoncé — aucune déduction, aucune supposition (ex. "il a mentionné ses enfants deux fois, il doit être proche d'eux" N'EST PAS un candidat valide ; "il a joué au foot avec son fils" ne permet PAS de déduire que son fils aime le foot — seul le moment partagé est un fait)
