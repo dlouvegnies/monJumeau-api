@@ -2566,6 +2566,17 @@ async def compose_bloc_context(
         this endpoint never stores it, the client decides what happens
         next (copy, or a direct API call to an external model).
 
+    ATTRIBUTION (added 31/08/2026, conversation Denis): `c.label` for
+    every candidate now carries an explicit subject — "Vous — ..." for
+    the actor's own traits/facts, a first name for a relationship fact
+    (services/blocContextSelection.js, SELF_REFERENTIAL_CLASSES). This
+    fixes a real bug: a block generated about Denis's son Edgar had
+    silently attributed Denis's own traits (Autonomie, Sécurité...) to
+    Edgar, because a bare trait label carried no subject and Claude
+    reasonably assumed anything unlabeled belonged to whoever the prompt
+    was about. The explicit rule below is a second line of defense on top
+    of the labels themselves — not a substitute for them.
+
     ---
 
     Compose le bloc de texte final du flux « Parler à une IA »
@@ -2586,6 +2597,19 @@ async def compose_bloc_context(
         {"success": True, "block": str} — prêt à copier ou à transmettre ;
         cet endpoint ne le stocke jamais, c'est le client qui décide de la
         suite (copie, ou appel API direct vers un modèle externe).
+
+    ATTRIBUTION (ajouté le 31/08/2026, conversation Denis) : `c.label`
+    porte désormais un sujet explicite pour chaque candidat — « Vous —
+    ... » pour les traits/faits de l'acteur lui-même, un prénom pour un
+    fait sur une relation (services/blocContextSelection.js,
+    SELF_REFERENTIAL_CLASSES). Ça corrige un vrai bug : un bloc généré au
+    sujet d'Edgar, le fils de Denis, avait silencieusement attribué à
+    Edgar les propres traits de Denis (Autonomie, Sécurité...), parce
+    qu'un libellé de trait nu ne portait aucun sujet et que Claude
+    supposait raisonnablement que tout ce qui n'était pas étiqueté
+    appartenait à la personne dont parlait le prompt. La règle explicite
+    ci-dessous est une seconde ligne de défense en plus des libellés
+    eux-mêmes — pas un substitut.
     """
     verify_secret(x_app_secret)
 
@@ -2610,6 +2634,7 @@ Rédige un MODE D'EMPLOI au modèle qui va répondre (300 mots maximum) — pas 
 - Voix impérative ou instructions directes ("Oriente vers...", "Évite de...")
 - N'invente RIEN au-delà des éléments fournis ci-dessus
 - Ne mentionne aucun chiffre de confiance ni pourcentage
+- CHAQUE élément ci-dessus porte déjà son sujet explicite ("Vous — ..." pour l'utilisateur lui-même, un prénom pour un proche, ex. "Léon — ..."). Ne réattribue JAMAIS un élément à quelqu'un d'autre que son sujet indiqué — même si la demande de l'utilisateur porte sur un proche, un élément marqué "Vous —" reste À PROPOS DE L'UTILISATEUR, jamais du proche en question
 - Termine par un saut de ligne, puis la demande de l'utilisateur elle-même, verbatim, seule sur sa ligne
 
 Réponds uniquement avec le texte du bloc en Markdown, sans titre, sans balises de code autour."""
