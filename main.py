@@ -2904,6 +2904,7 @@ Règles impératives :
     - "special" si le candidat porte sur un tiers au-delà de son existence/lien (ex. sa profession, ses goûts, sa date d'anniversaire) — jamais "standard" dans ce cas
     - "elevated" pour finance personnelle, services professionnels, ou "content.organizationLabel" (employeur)
     - "standard" sinon
+- Pour la catégorie 6 (RelationshipFact), "factKinds" est un TABLEAU, pas une valeur unique — liste TOUS les angles qui s'appliquent réellement au fait énoncé, pas seulement le premier qui vient à l'esprit (ex. "il a fait un stage à Madagascar" relève à la fois de "location" ET de "employment" ; liste les deux). Au moins une valeur, sans doublon, sans en inventer qui ne correspondent à rien dans le texte — n'ajoute pas un angle juste parce qu'il est dans la liste autorisée s'il ne reflète rien d'énoncé
 - N'invente rien qui ressemble à une donnée de santé, opinion politique, religieuse, ou orientation — ignore-les complètement si mentionnées, y compris à propos d'un proche
 - Si rien de factuel et nouveau n'est dit, réponds avec un tableau vide
 
@@ -2925,7 +2926,7 @@ Catégories disponibles — utilise EXACTEMENT ces combinaisons target_domain/ta
    content: {{"topic": "sujet de la préférence, ex. 'films-series', 'sport-activites', 'ressourcement'", "preferred": "ce qui est préféré — inclut les préférences de l'acteur qui se manifestent à travers un moment partagé avec un proche (ex. jouer avec son fils le ressource), pas seulement ses goûts en solo"}}
 
 6. target_domain="RelationshipDomain", target_class="RelationshipFact"
-   content: {{"counterpartLabel": "même désignation que la catégorie 4, pour rattacher ce fait à la bonne personne", "factKind": "location" | "age" | "hobby" | "education" | "employment", "value": "le fait lui-même, bref, dans les mots de l'acteur (ex. '8 ans', 'aime le foot', 'études d'ingénieur')"}}
+   content: {{"counterpartLabel": "même désignation que la catégorie 4, pour rattacher ce fait à la bonne personne", "factKinds": ["location" | "age" | "hobby" | "education" | "employment", "..."], "value": "le fait lui-même, bref, dans les mots de l'acteur (ex. '8 ans', 'aime le foot', 'études d'ingénieur')"}}
 
 Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 [{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
