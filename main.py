@@ -374,6 +374,71 @@ async def sb_get_one(table: str, params: dict):
     rows = await sb_get(table, {**params, "limit": "1"})
     return rows[0] if rows else None
 
+# ── SUIVI DE COÛT IA (ai_usage_log, Supabase) ──────────────────────────────
+# Point de passage unique pour tout appel à l'API Anthropic. Objectif :
+# piloter le coût du service sans jamais relier un appel à une identité
+# réelle — `client_ref` est soit le x-device-token déjà envoyé par apiFetch
+# sur CHAQUE requête de l'app (aucune identité, un identifiant d'appareil),
+# soit, pour analyze_comparison qui tourne en tâche de fond sans requête
+# HTTP directe, le my_code déjà présent en base pour cette comparaison —
+# même famille d'identifiant anonyme, juste une source différente selon le
+# contexte d'appel.
+CLAUDE_PRICING = {
+    # $ par million de tokens (entrée, sortie) — tarifs officiels Anthropic.
+    # Seul "claude-sonnet-4-6" est utilisé dans ce fichier à ce jour, mais la
+    # table reste prête si un autre modèle est introduit plus tard.
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+}
+
+def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    pricing = CLAUDE_PRICING.get(model, {"input": 0.0, "output": 0.0})
+    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+async def log_ai_usage(client_ref, purpose: str, model: str, usage: dict):
+    """Journalise un appel Claude dans ai_usage_log — fire-and-forget,
+    jamais bloquant et jamais visible de l'acteur (RFC-0004bis CA-11, même
+    logique de tolérance d'échec que le reste du fichier : une stat perdue
+    n'est jamais une raison de casser une réponse déjà en cours)."""
+    try:
+        input_tokens  = usage.get("input_tokens", 0) or 0
+        output_tokens = usage.get("output_tokens", 0) or 0
+        await sb_post('ai_usage_log', {
+            "client_ref":         client_ref,
+            "purpose":            purpose,
+            "model":              model,
+            "input_tokens":       input_tokens,
+            "output_tokens":      output_tokens,
+            "estimated_cost_usd": round(estimate_cost_usd(model, input_tokens, output_tokens), 6),
+        })
+    except Exception as e:
+        print(f"[ai_usage] log échoué ({purpose}): {e}")
+
+async def call_claude(*, messages, max_tokens, purpose: str, system: str = None,
+                       client_ref=None, model: str = "claude-sonnet-4-6", timeout: float = 30.0):
+    """Remplace un `client.post("https://api.anthropic.com/v1/messages", ...)`
+    direct : même comportement (retourne l'objet httpx.Response tel quel,
+    donc `.status_code` / `.json()` fonctionnent exactement comme avant à
+    chaque site d'appel), avec en plus la journalisation automatique du
+    coût via `log_ai_usage`. `purpose` identifie la fonctionnalité
+    (ex. "chat_reply", "capture_extract") pour pouvoir comparer les coûts
+    entre fonctionnalités, pas seulement le total."""
+    payload = {"model": model, "max_tokens": max_tokens, "messages": messages}
+    if system is not None:
+        payload["system"] = system
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json=payload,
+            timeout=timeout,
+        )
+    try:
+        usage = response.json().get("usage") or {}
+        asyncio.create_task(log_ai_usage(client_ref, purpose, model, usage))
+    except Exception as e:
+        print(f"[ai_usage] extraction usage échouée ({purpose}): {e}")
+    return response
+
 def iso_now() -> str:
     """Timestamp UTC actuel en ISO 8601 — PostgREST attend une valeur littérale, pas une expression SQL comme NOW()."""
     return datetime.now(timezone.utc).isoformat()
@@ -899,17 +964,14 @@ async def health_head():
 
 # ── ENDPOINTS CLAUDE ──
 @app.post("/recommend")
-async def recommend(req: MessageRequest, x_app_secret: str = Header(None)):
+async def recommend(req: MessageRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
     verify_secret(x_app_secret)
     if not CLAUDE_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API manquante")
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": "claude-sonnet-4-6", "max_tokens": req.max_tokens, "system": req.system, "messages": req.messages},
-            timeout=30.0,
-        )
+    response = await call_claude(
+        system=req.system, messages=req.messages, max_tokens=req.max_tokens,
+        purpose="recommend", client_ref=x_device_token,
+    )
     return response.json()
 
 # ── ENDPOINTS GIFTS — Supabase ──
@@ -1121,13 +1183,13 @@ Retourne UNIQUEMENT un JSON valide :
   ],
   "message_poetique": "Deux rivières qui coulent à des vitesses différentes, mais qui nourrissent le même territoire."
 }}"""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": "claude-sonnet-4-6", "max_tokens": 2000, "messages": [{"role": "user", "content": prompt}]},
-            timeout=30.0,
-        )
+    # Pas de requête HTTP directe ici (tâche de fond) donc pas de
+    # x-device-token disponible — on utilise from_code, déjà l'identifiant
+    # anonyme de la comparaison en base, dans le même rôle.
+    response = await call_claude(
+        messages=[{"role": "user", "content": prompt}], max_tokens=2000,
+        purpose="compare_generate", client_ref=comparison.get('from_code'),
+    )
     data = response.json()
     result_text = data['content'][0]['text']
     json_match = re.search(r'\{[\s\S]*\}', result_text)
@@ -1408,7 +1470,7 @@ async def get_restaurant_details(req: RestaurantRequest, x_app_secret: str = Hea
         return {"result": None}
 
 @app.post("/recipe/details")
-async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None)):
+async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
     verify_secret(x_app_secret)
     try:
         print(f"🔍 Recherche recette Spoonacular: {req.title}")
@@ -1421,12 +1483,9 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
             )
             search_data = search_response.json()
             if not search_data.get("results"):
-                simplify_response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                    json={"model": "claude-sonnet-4-6", "max_tokens": 20,
-                          "messages": [{"role": "user", "content": f'Give the simplified English name (1-4 words) of this recipe for a search. Reply ONLY with the name: "{req.title}"'}]},
-                    timeout=10.0,
+                simplify_response = await call_claude(
+                    messages=[{"role": "user", "content": f'Give the simplified English name (1-4 words) of this recipe for a search. Reply ONLY with the name: "{req.title}"'}],
+                    max_tokens=20, purpose="recipe_simplify_query", client_ref=x_device_token, timeout=10.0,
                 )
                 simplified = simplify_response.json()['content'][0]['text'].strip()
                 search_response = await client.get(
@@ -1471,15 +1530,11 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
   "ingredients_fr": [{{"ingredient": "ingrédient traduit", "measure": "mesure traduite"}}],
   "steps_fr": ["étape 1 traduite", "étape 2 traduite"]
 }}"""
-        async with httpx.AsyncClient() as client:
-            claude_response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                json={"model": "claude-sonnet-4-6", "max_tokens": 2000,
-                      "messages": [{"role": "user", "content": translation_prompt}]},
-                timeout=30.0,
-            )
-            translation_text = claude_response.json()['content'][0]['text']
+        claude_response = await call_claude(
+            messages=[{"role": "user", "content": translation_prompt}], max_tokens=2000,
+            purpose="recipe_translate", client_ref=x_device_token,
+        )
+        translation_text = claude_response.json()['content'][0]['text']
         json_match = re.search(r'\{[\s\S]*\}', translation_text)
         translation = {}
         if json_match:
@@ -1542,7 +1597,7 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
         return {"articles": []}
 
 @app.post("/news/personalized")
-async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None)):
+async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
     verify_secret(x_app_secret)
     try:
         all_articles = []
@@ -1583,14 +1638,11 @@ ARTICLES :
 {articles_summary}
 Sélectionne les 10 articles les plus pertinents. Retourne UNIQUEMENT ce JSON :
 {{"selected": [{{"index": 1, "why": "Explication courte"}}]}}"""
-        async with httpx.AsyncClient() as client:
-            claude_response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                json={"model": "claude-sonnet-4-6", "max_tokens": 600, "messages": [{"role": "user", "content": prompt}]},
-                timeout=20.0,
-            )
-            claude_text = claude_response.json()['content'][0]['text']
+        claude_response = await call_claude(
+            messages=[{"role": "user", "content": prompt}], max_tokens=600,
+            purpose="news_personalize", client_ref=x_device_token, timeout=20.0,
+        )
+        claude_text = claude_response.json()['content'][0]['text']
         json_match   = re.search(r'\{[\s\S]*\}', claude_text)
         personalized = []
         if json_match:
@@ -2345,7 +2397,7 @@ async def rc_webapp(session_key: str, v: str = "universel"):
 
 
 @app.post("/portrait")
-async def generate_portrait(req: PortraitRequest, x_app_secret: str = Header(None)):
+async def generate_portrait(req: PortraitRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
     verify_secret(x_app_secret)
 
     if not req.traits:
@@ -2387,21 +2439,10 @@ Voici le modèle personnel de cet utilisateur, construit à partir de ses compor
 
 Rédige le portrait narratif."""
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30.0,
-        )
+    response = await call_claude(
+        messages=[{"role": "user", "content": prompt}], max_tokens=1000,
+        purpose="portrait_narrative", client_ref=x_device_token,
+    )
 
     data     = response.json()
     portrait = data['content'][0]['text'].strip()
@@ -2418,6 +2459,7 @@ Rédige le portrait narratif."""
 async def select_bloc_context_candidates(
     req: BlocContextSelectRequest,
     x_app_secret: str = Header(None),
+    x_device_token: str = Header(None),
 ):
     """Ranks the relevance of the actor's eligible portrait traits against
     their free-text prompt, for the "Parler à une IA" flow (RFC-0004bis
@@ -2493,28 +2535,17 @@ Ignore complètement les éléments qui ne sont pas pertinents pour cette situat
 Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises markdown :
 [{{"attribute": "...", "relevanceScore": 0.0, "rationale": "..."}}]"""
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": CLAUDE_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 2000,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=45.0,
-            )
-        except httpx.TimeoutException:
-            print("[bloc-context/select] TIMEOUT — Claude n'a pas répondu à temps")
-            raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
-        except httpx.HTTPError as e:
-            print(f"[bloc-context/select] ERREUR RÉSEAU — {e}")
-            raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+    try:
+        response = await call_claude(
+            messages=[{"role": "user", "content": prompt}], max_tokens=2000,
+            purpose="bloc_context_select", client_ref=x_device_token, timeout=45.0,
+        )
+    except httpx.TimeoutException:
+        print("[bloc-context/select] TIMEOUT — Claude n'a pas répondu à temps")
+        raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+    except httpx.HTTPError as e:
+        print(f"[bloc-context/select] ERREUR RÉSEAU — {e}")
+        raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
 
     if response.status_code != 200:
         print(f"[bloc-context/select] CLAUDE A RÉPONDU {response.status_code} — {response.text[:500]}")
@@ -2546,6 +2577,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises
 async def compose_bloc_context(
     req: BlocContextComposeRequest,
     x_app_secret: str = Header(None),
+    x_device_token: str = Header(None),
 ):
     """Composes the final text block for the "Parler à une IA" flow
     (RFC-0004bis §5-6, étape 6) — the second inference, run only after the
@@ -2639,26 +2671,15 @@ Rédige un MODE D'EMPLOI au modèle qui va répondre (300 mots maximum) — pas 
 
 Réponds uniquement avec le texte du bloc en Markdown, sans titre, sans balises de code autour."""
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": CLAUDE_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 800,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=45.0,
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
-        except httpx.HTTPError:
-            raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+    try:
+        response = await call_claude(
+            messages=[{"role": "user", "content": prompt}], max_tokens=800,
+            purpose="bloc_context_compose", client_ref=x_device_token, timeout=45.0,
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
 
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
@@ -2674,6 +2695,7 @@ Réponds uniquement avec le texte du bloc en Markdown, sans titre, sans balises 
 async def reformulate_prompt(
     req: PromptReformulateRequest,
     x_app_secret: str = Header(None),
+    x_device_token: str = Header(None),
 ):
     """Reformulates the actor's own free-text prompt for clarity and
     structure only — étape 3bis (optionnelle) du flux « Parler à une IA »,
@@ -2746,26 +2768,15 @@ Réécris cette demande pour la rendre plus claire et mieux structurée. Règles
 
 Réponds UNIQUEMENT avec le texte reformulé, sans commentaire, sans guillemets autour."""
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": CLAUDE_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 500,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=30.0,
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
-        except httpx.HTTPError:
-            raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
+    try:
+        response = await call_claude(
+            messages=[{"role": "user", "content": prompt}], max_tokens=500,
+            purpose="prompt_reformulate", client_ref=x_device_token,
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Impossible de joindre Claude — réessayez.")
 
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Claude a répondu une erreur ({response.status_code}).")
@@ -2781,6 +2792,7 @@ Réponds UNIQUEMENT avec le texte reformulé, sans commentaire, sans guillemets 
 async def extract_capture_candidates(
     req: CaptureExtractRequest,
     x_app_secret: str = Header(None),
+    x_device_token: str = Header(None),
 ):
     """Extracts candidate contextual facts — about the actor themselves,
     or about the people around them (RelationshipFact: location, age,
@@ -2932,21 +2944,10 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 [{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": CLAUDE_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 1000,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=45.0,
-            )
+        response = await call_claude(
+            messages=[{"role": "user", "content": prompt}], max_tokens=1000,
+            purpose="capture_extract", client_ref=x_device_token, timeout=45.0,
+        )
         if response.status_code != 200:
             return {"success": True, "candidates": []}
     except httpx.HTTPError:
@@ -2983,6 +2984,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 async def send_bloc_context_to_claude(
     req: BlocContextSendRequest,
     x_app_secret: str = Header(None),
+    x_device_token: str = Header(None),
 ):
     """Sends the composed context block to Claude using ZEOPY's own API
     key (same key as every other endpoint in this file) — the "envoyer à
@@ -3019,21 +3021,11 @@ async def send_bloc_context_to_claude(
         raise HTTPException(status_code=400, detail="Bloc vide")
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": CLAUDE_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 1500,
-                    "messages": [{"role": "user", "content": req.block}],
-                },
-                timeout=60.0,  # généreux : une réponse structurée (tableaux, catégories) prend plus que 30s
-            )
+        response = await call_claude(
+            messages=[{"role": "user", "content": req.block}], max_tokens=1500,
+            purpose="bloc_context_send", client_ref=x_device_token,
+            timeout=60.0,  # généreux : une réponse structurée (tableaux, catégories) prend plus que 30s
+        )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Claude met trop de temps à répondre — réessayez.")
     except httpx.HTTPError:
@@ -3050,7 +3042,7 @@ async def send_bloc_context_to_claude(
 
 
 @app.post("/research")
-async def generate_research(req: ResearchRequest, x_app_secret: str = Header(None)):
+async def generate_research(req: ResearchRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
     verify_secret(x_app_secret)
 
     if not req.insights:
@@ -3078,21 +3070,10 @@ Rédige une synthèse personnalisée de 2 paragraphes (100 à 150 mots) qui :
 
 Ne reproduis pas les insights mot pour mot. Synthétise, relie, donne du sens."""
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 600,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30.0,
-        )
+    response = await call_claude(
+        messages=[{"role": "user", "content": prompt}], max_tokens=600,
+        purpose="research_synthesis", client_ref=x_device_token,
+    )
 
     data      = response.json()
     synthesis = data['content'][0]['text'].strip()
@@ -3108,6 +3089,7 @@ Ne reproduis pas les insights mot pour mot. Synthétise, relie, donne du sens.""
 async def generate_jobs_narrative(
     req: JobsRequest,
     x_app_secret: str = Header(None),
+    x_device_token: str = Header(None),
 ):
     verify_secret(x_app_secret)
 
@@ -3173,21 +3155,10 @@ Rédige une présentation personnalisée de ces métiers en 3 à 4 paragraphes (
 - Ton : coach expérimenté qui parle à un pair, pas un conseiller Pôle Emploi
 - Langue : français, vouvoiement"""
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 800,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30.0,
-        )
+    response = await call_claude(
+        messages=[{"role": "user", "content": prompt}], max_tokens=800,
+        purpose="jobs_presentation", client_ref=x_device_token,
+    )
 
     data      = response.json()
     narrative = data['content'][0]['text'].strip()
