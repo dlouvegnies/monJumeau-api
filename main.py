@@ -2507,7 +2507,8 @@ async def generate_portrait_resume(req: PortraitRequest, x_app_secret: str = Hea
 Ton rôle : condenser ce modèle en une capsule d'identité de 3 phrases courtes maximum — pas un paragraphe, pas un résumé narratif.
 
 Règles impératives :
-- 3 phrases courtes maximum, séparées par des points
+- 3 phrases courtes maximum, séparées par des points, à la suite les unes des autres, sans saut de ligne entre elles
+- Texte brut uniquement : aucun markdown, aucun astérisque, aucun symbole de mise en forme
 - Ne jamais citer les noms techniques des attributs, ni les chiffres de confiance ou pourcentages
 - Ne pas utiliser "vous" ni "je" — écrire à la manière d'un titre incarné, sans sujet personnel explicite (ex. "Un bâtisseur curieux, qui a besoin de mener sa route seul et qui garde ses proches très près.")
 - Phrase 1 : capturer l'identité dominante en une image ou un trait fort
@@ -2528,6 +2529,10 @@ Rédige la capsule d'identité en 3 phrases maximum."""
 
     data   = response.json()
     resume = data['content'][0]['text'].strip()
+    # Filet de sécurité : le texte est affiché en RN <Text> brut, sans
+    # rendu markdown — on retire les astérisques (gras/italique) au cas où
+    # le modèle en aurait mis malgré la consigne.
+    resume = re.sub(r'\*+', '', resume).strip()
 
     return {
         "success":     True,
