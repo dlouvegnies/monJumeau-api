@@ -2454,6 +2454,88 @@ Rédige le portrait narratif."""
     }
 
 
+@app.post("/portrait-resume")
+async def generate_portrait_resume(req: PortraitRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
+    """Generates a 3-line identity capsule from the user's traits — a short,
+    punchy alternative to the full narrative portrait (see /portrait above),
+    meant to be displayed as a compact block on the Portrait screen.
+
+    Args:
+        req: Body containing the list of eligible traits (same shape as /portrait).
+        x_app_secret: Shared app secret, verified before any processing.
+        x_device_token: Opaque device identifier, forwarded to call_claude for logging/attribution.
+
+    Returns:
+        JSON with `success`, the generated `resume` text (3 sentences max), and `trait_count`.
+
+    ---
+
+    Génère une capsule d'identité en 3 lignes à partir des traits de
+    l'utilisateur — une alternative courte et incisive au portrait narratif
+    complet (voir /portrait ci-dessus), destinée à être affichée comme un
+    bloc compact sur l'écran Portrait.
+
+    Args (FR):
+        req: Corps contenant la liste des traits éligibles (même forme que /portrait).
+        x_app_secret: Secret d'application partagé, vérifié avant tout traitement.
+        x_device_token: Identifiant opaque de l'appareil, transmis à call_claude pour le suivi/l'attribution.
+
+    Returns (FR):
+        JSON avec `success`, le texte `resume` généré (3 phrases maximum), et `trait_count`.
+    """
+    verify_secret(x_app_secret)
+
+    if not req.traits:
+        raise HTTPException(status_code=400, detail="Aucun trait fourni")
+
+    # ── Construction du bloc traits (identique à /portrait) ──
+    by_dim = {}
+    for t in req.traits:
+        if t.dimension not in by_dim:
+            by_dim[t.dimension] = []
+        label     = t.label_fr or t.attribute
+        direction = "élevé" if t.value > 0.5 else "modéré"
+        by_dim[t.dimension].append(f"  • {label} ({direction})")
+
+    trait_lines = "\n\n".join(
+        f"{dim.upper()}\n" + "\n".join(attrs)
+        for dim, attrs in by_dim.items()
+    )
+
+    prompt = f"""Tu es un coach professionnel bienveillant et lucide. Tu as accès au modèle personnel d'un utilisateur de l'application ZEOPY.
+
+Ton rôle : condenser ce modèle en une capsule d'identité de 3 phrases courtes maximum — pas un paragraphe, pas un résumé narratif.
+
+Règles impératives :
+- 3 phrases courtes maximum, séparées par des points
+- Ne jamais citer les noms techniques des attributs, ni les chiffres de confiance ou pourcentages
+- Ne pas utiliser "vous" ni "je" — écrire à la manière d'un titre incarné, sans sujet personnel explicite (ex. "Un bâtisseur curieux, qui a besoin de mener sa route seul et qui garde ses proches très près.")
+- Phrase 1 : capturer l'identité dominante en une image ou un trait fort
+- Phrase(s) suivante(s) : le mode de fonctionnement principal, avec si pertinent une tension ou un contraste (ex. "Plus dur au travail qu'à la maison.")
+- Ton direct, incarné, sans jargon, sans flatterie ni psychanalyse
+- Le résultat doit créer un effet de reconnaissance immédiat : la personne doit penser "oui, c'est bien moi"
+
+Voici le modèle personnel de cet utilisateur, construit à partir de ses comportements et réponses :
+
+{trait_lines}
+
+Rédige la capsule d'identité en 3 phrases maximum."""
+
+    response = await call_claude(
+        messages=[{"role": "user", "content": prompt}], max_tokens=200,
+        purpose="portrait_resume", client_ref=x_device_token,
+    )
+
+    data   = response.json()
+    resume = data['content'][0]['text'].strip()
+
+    return {
+        "success":     True,
+        "resume":      resume,
+        "trait_count": len(req.traits),
+    }
+
+
 
 @app.post("/bloc-context/select")
 async def select_bloc_context_candidates(
