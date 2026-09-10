@@ -564,6 +564,12 @@ class ArticleVectorRequest(BaseModel):
 
 
 # ── MODÈLES REGARD CROISÉ ──
+class ConnectionEnsureRequest(BaseModel):
+    my_code: str
+    my_alias: str
+    their_code: str
+    their_alias: str
+
 class RCCreateSessionRequest(BaseModel):
     my_code: str
     version: str = 'universel'  # ← ajoute
@@ -2077,6 +2083,124 @@ async def connection_synced(request: Request, x_app_secret: str = Header(None)):
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.post("/connection/ensure")
+async def connection_ensure(req: ConnectionEnsureRequest, x_app_secret: str = Header(None)):
+    """
+    Re-creates an 'accepted' connection_requests row for a relationship the
+    caller already has stored locally, when it is missing from Supabase —
+    typically after backend data loss. Bypasses the normal
+    request/response handshake on purpose: the two devices already agreed
+    to this connection in the past, so re-asserting one direction of it is
+    not a new grant of trust, just a repair of lost state. Idempotent: does
+    nothing if an accepted row already exists for this direction.
+
+    Called from the client's syncAcceptedConnections(), once per locally
+    known connection that the server no longer reports back. Since
+    connection_accepted() matches a code on either from_code or to_code,
+    a single device repairing its own outgoing edge is enough to make the
+    relationship reappear for both sides.
+
+    ---
+
+    Recrée une ligne connection_requests 'accepted' pour une relation déjà
+    connue en local par l'appelant, quand elle est absente de Supabase —
+    typiquement après une perte de données côté backend. Contourne
+    volontairement le cycle normal demande/réponse : les deux appareils ont
+    déjà validé cette connexion par le passé, réaffirmer un sens de la
+    relation n'est donc pas un nouvel octroi de confiance, juste une
+    réparation d'état perdu. Idempotent : ne fait rien si une ligne
+    acceptée existe déjà pour ce sens.
+
+    Appelé depuis syncAcceptedConnections() côté client, une fois par
+    connexion connue en local que le serveur ne renvoie plus. Comme
+    connection_accepted() recherche un code aussi bien en from_code qu'en
+    to_code, la réparation d'un seul sens par un seul appareil suffit à
+    faire réapparaître la relation pour les deux côtés.
+    """
+    verify_secret(x_app_secret)
+    my_code    = req.my_code.strip().upper()
+    their_code = req.their_code.strip().upper()
+    if not my_code or not their_code:
+        return {"success": False, "error": "Codes manquants"}
+    if my_code == their_code:
+        return {"success": False, "error": "Codes identiques"}
+    try:
+        existing = await sb_get('connection_requests', {
+            "from_code": f"eq.{my_code}", "to_code": f"eq.{their_code}",
+            "status": "eq.accepted", "select": "id",
+        })
+        if existing:
+            return {"success": True, "created": False}
+        await sb_post('connection_requests', {
+            "from_code": my_code, "to_code": their_code,
+            "from_alias": req.my_alias or my_code,
+            "to_alias":   req.their_alias or their_code,
+            "status":     "accepted",
+        }, prefer="return=representation")
+        print(f"🩹 Connexion auto-réparée: {my_code} → {their_code}")
+        return {"success": True, "created": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/identity/{code}")
+async def purge_identity(code: str, x_app_secret: str = Header(None)):
+    """
+    Purge toute trace d'un code jumeau côté backend, appelé par l'app au
+    moment d'une réinitialisation complète (resetAll côté client).
+
+    my_code n'a pas de table dédiée en Supabase — il n'apparaît qu'en clé
+    étrangère dans plusieurs tables (push_tokens, connection_requests,
+    comparisons, gifts, rc_invitations), plus device_tokens qui est en
+    SQLite local sur ce serveur (gifts.db), pas dans Supabase. On supprime
+    donc partout où le code peut traîner.
+
+    Ne touche PAS aux copies locales de la relation stockées sur les
+    téléphones des proches (table `connections` de leur app) : elles
+    resteront affichées jusqu'à leur prochain sync, qui ne trouvera plus
+    rien pour ce code — la relation est bien rompue, comportement voulu
+    puisqu'un reset complet fait repartir sur une identité neuve.
+
+    ---
+
+    Purges every trace of a jumeau code on the backend, called by the app
+    when the user performs a full reset (client-side resetAll).
+
+    my_code has no dedicated table in Supabase — it only appears as a
+    foreign key across several tables (push_tokens, connection_requests,
+    comparisons, gifts, rc_invitations), plus device_tokens which lives in
+    this server's local SQLite (gifts.db), not in Supabase. So we delete
+    it everywhere it can appear.
+
+    Does NOT touch the local copies of the relationship stored on peers'
+    phones (their app's `connections` table): those will keep showing
+    until their next sync, which will find nothing left for this code —
+    the relationship is indeed severed, which is the intended behavior
+    since a full reset means starting over on a brand new identity.
+    """
+    verify_secret(x_app_secret)
+    code = code.strip().upper()
+    if not code:
+        return {"success": False, "error": "Code manquant"}
+    try:
+        await sb_delete('push_tokens',        {"my_code": f"eq.{code}"})
+        await sb_delete('connection_requests', {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
+        await sb_delete('comparisons',         {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
+        await sb_delete('gifts',               {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
+        await sb_delete('rc_invitations',      {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
+
+        db = get_db()
+        db.execute('DELETE FROM device_tokens WHERE my_code = ?', (code,))
+        db.commit()
+        db.close()
+
+        print(f"🗑️  Identité purgée: {code}")
+        return {"success": True}
+    except Exception as e:
+        print(f"❌ purge_identity erreur: {str(e)}")
+        return {"success": False, "error": str(e)}
+
 
 # ── ENDPOINTS ADMIN ──
 @app.post("/admin/cleanup")
