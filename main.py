@@ -2999,6 +2999,12 @@ Réponds UNIQUEMENT avec le texte reformulé, sans commentaire, sans guillemets 
 
 
 
+# Méthode d'extraction de /capture/extract, versionnée (CA-14, lot 2b V3,
+# 16/09/2026). Changer le prompt de cette route = nouvelle version ici ET
+# dans le registre des instruments du catalogue de l'app (hcl-cap:extract-fr).
+CAPTURE_EXTRACT_METHOD = "hcl-cap:extract-fr@1.0.0"
+
+
 @app.post("/capture/extract")
 async def extract_capture_candidates(
     req: CaptureExtractRequest,
@@ -3042,10 +3048,12 @@ async def extract_capture_candidates(
         x_app_secret: Shared-secret header, checked by verify_secret.
 
     Returns:
-        {"success": True, "candidates": [{"target_domain", "target_class",
-        "content", "sensitivity", "extraction_confidence"}, ...]} — an
-        empty list is a normal, valid result (nothing worth proposing),
-        not an error.
+        {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status":
+        "done" | "failed" | "empty_input", "candidates": [{"target_domain",
+        "target_class", "content", "sensitivity", "extraction_confidence"},
+        ...]} — an empty list with status "done" is a normal, valid result
+        (nothing worth proposing); status "failed" means the model call or
+        its parsing failed (V3: the app records the attempt either way).
 
     ---
 
@@ -3089,15 +3097,17 @@ async def extract_capture_candidates(
         x_app_secret: En-tête de secret partagé, vérifié par verify_secret.
 
     Returns:
-        {"success": True, "candidates": [{"target_domain", "target_class",
-        "content", "sensitivity", "extraction_confidence"}, ...]} — une
-        liste vide est un résultat normal et valide (rien à proposer), pas
-        une erreur.
+        {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status":
+        "done" | "failed" | "empty_input", "candidates": [...]} — une liste
+        vide avec le statut "done" est un résultat normal et valide (rien à
+        proposer) ; le statut "failed" signale un échec de l'appel au modèle
+        ou de sa lecture (V3 : l'app enregistre la tentative dans les deux
+        cas).
     """
     verify_secret(x_app_secret)
 
     if not req.text.strip():
-        return {"success": True, "candidates": []}
+        return {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status": "empty_input", "candidates": []}
 
     # Point 2 de la correction anti-doublon (31/08/2026, conversation
     # Denis) — voir le docstring de la classe CaptureExtractRequest et le
@@ -3160,13 +3170,13 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
             purpose="capture_extract", client_ref=x_device_token, timeout=45.0,
         )
         if response.status_code != 200:
-            return {"success": True, "candidates": []}
+            return {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status": "failed", "candidates": []}
     except httpx.HTTPError:
         # Échec silencieux volontaire (RFC-0004bis CA-11) : cette extraction
         # tourne après que la réponse de Claude a déjà été affichée à
         # l'acteur — un timeout ici ne doit jamais lui être montré comme
         # une erreur, juste ne rien proposer cette fois.
-        return {"success": True, "candidates": []}
+        return {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status": "failed", "candidates": []}
 
     data = response.json()
     raw  = data['content'][0]['text'].strip()
@@ -3179,7 +3189,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
         # l'acteur — un échec ici ne doit jamais lui être montré comme une
         # erreur, juste ne rien proposer cette fois. Déjà loggé par
         # extract_json_array.
-        return {"success": True, "candidates": []}
+        return {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status": "failed", "candidates": []}
 
     # Trace du chemin de succès — absente jusqu'ici, ce qui rendait toute
     # extraction invisible dans Render même quand elle fonctionnait.
@@ -3187,7 +3197,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
     summary = [f"{c.get('target_class')}({c.get('sensitivity')})" for c in candidates]
     print(f"[capture/extract] {len(candidates)} candidat(s) extrait(s) : {summary}")
 
-    return {"success": True, "candidates": candidates}
+    return {"success": True, "method": CAPTURE_EXTRACT_METHOD, "status": "done", "candidates": candidates}
 
 
 
