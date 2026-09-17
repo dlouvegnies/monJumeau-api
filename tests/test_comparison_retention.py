@@ -274,19 +274,15 @@ async def test_la_relance_ne_double_pas_l_attente_sans_limite(base, monkeypatch)
     faire patienter deux téléphones une seconde fois."""
     base.lignes = [comparaison()]
     appels = []
-    fautif = json.dumps({"message_poetique": "L'un avance, l'autre regarde."}, ensure_ascii=False)
 
-    async def modele_fautif(**kwargs):
+    async def modele_tronque(**kwargs):
         appels.append(kwargs.get("timeout"))
-        class R:
-            status_code = 200
-            def json(self): return {"content": [{"text": fautif}]}
-        return R()
+        return _reponse('{"score_global": 80, "mess', stop_reason="max_tokens")
 
     async def sans_push(**kwargs):
         return None
 
-    monkeypatch.setattr(main, "call_model", modele_fautif)
+    monkeypatch.setattr(main, "call_model", modele_tronque)
     monkeypatch.setattr(main, "send_push_notification", sans_push)
     monkeypatch.setattr(main, "COMPARE_BUDGET_SECONDS", 0.0)
     await main.analyze_comparison("c1")
@@ -294,17 +290,20 @@ async def test_la_relance_ne_double_pas_l_attente_sans_limite(base, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_la_relance_a_lieu_quand_le_budget_le_permet(base, monkeypatch):
+async def test_une_faute_attributive_ne_declenche_plus_de_relance(base, monkeypatch):
+    """Relancer sur une faute de rédaction a échoué 4 fois sur 4 le 17/09 :
+    le modèle refait la même tournure, et l'utilisateur attend deux fois plus
+    longtemps pour rien. On garde le premier essai et on compte."""
     base.lignes = [comparaison()]
+    main.COMPTEUR_COMPARAISONS["total"] = 0
+    main.COMPTEUR_COMPARAISONS["conservees_avec_fautes"] = 0
     appels = []
-    fautif = json.dumps({"message_poetique": "L'un avance, l'autre regarde."}, ensure_ascii=False)
+    fautif = json.dumps({"score_global": 70,
+                         "message_poetique": "L'un avance, l'autre regarde."}, ensure_ascii=False)
 
     async def modele_fautif(**kwargs):
         appels.append(kwargs.get("timeout"))
-        class R:
-            status_code = 200
-            def json(self): return {"content": [{"text": fautif}]}
-        return R()
+        return _reponse(fautif)
 
     async def sans_push(**kwargs):
         return None
@@ -312,8 +311,34 @@ async def test_la_relance_a_lieu_quand_le_budget_le_permet(base, monkeypatch):
     monkeypatch.setattr(main, "call_model", modele_fautif)
     monkeypatch.setattr(main, "send_push_notification", sans_push)
     await main.analyze_comparison("c1")
+    assert len(appels) == 1, f"un seul essai attendu, obtenu {len(appels)}"
+    assert base.lignes[0]["status"] == "completed"
+    assert main.COMPTEUR_COMPARAISONS == {"total": 1, "conservees_avec_fautes": 1}
+
+
+@pytest.mark.asyncio
+async def test_la_relance_a_lieu_quand_la_reponse_est_vraiment_inutilisable(base, monkeypatch):
+    """Elle ne sert plus qu'à ce qu'elle répare vraiment : un JSON illisible
+    ou une réponse tronquée."""
+    base.lignes = [comparaison()]
+    appels = []
+    propre = json.dumps({"score_global": 80, "message_poetique": "{A} et {B}."}, ensure_ascii=False)
+
+    async def modele(**kwargs):
+        appels.append(kwargs.get("timeout"))
+        if len(appels) == 1:
+            return _reponse('{"score_global": 80, "mess', stop_reason="max_tokens")
+        return _reponse(propre)
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    await main.analyze_comparison("c1")
     assert len(appels) == 2
     assert all(t is not None and t > 0 for t in appels), appels
+    assert base.lignes[0]["status"] == "completed"
 
 
 def test_la_tache_de_fond_recupere_son_exception():

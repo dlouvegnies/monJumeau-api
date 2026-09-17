@@ -217,3 +217,36 @@ def test_le_fragment_cite_reste_celui_du_texte_d_origine():
     fautes = main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False))
     assert len(fautes) == 1
     assert "finit par céder" in fautes[0], fautes[0]
+
+
+def test_le_prompt_montre_un_exemple_dedie_au_message_poetique():
+    """Sur 904E9797 (17/09), les deux essais n'ont eu qu'un seul reproche, et
+    toujours sur ce champ : « L'un allume… », « L'un bâtit… ». L'exemple
+    général ne suffisait pas — l'image poétique appelle son propre modèle,
+    placé juste avant la description du champ."""
+    prompt = main.construire_prompt_comparaison({"a": 1}, {"b": 2})
+    contre = "✗ \"L'un allume sa lampe quand l'autre s'endort\""
+    corrige = "✓ \"{A} allume sa lampe quand {B} s'endort\""
+    assert contre in prompt, "le contre-exemple du message poétique manque"
+    assert corrige in prompt, "la correction du message poétique manque"
+    assert prompt.index(contre) < prompt.index(corrige) < prompt.index('"message_poetique":'), \
+        "l'exemple doit précéder immédiatement la description du champ"
+
+
+def test_le_prompt_respecte_sa_propre_regle():
+    """Un exemple qui enfreint la règle qu'il illustre l'annule. Toutes les
+    valeurs du JSON montré — hors ligne « ✗ », qui est le contre-exemple —
+    doivent passer le validateur.
+
+    Le contrôle ne porte que sur ce bloc : ailleurs, le prompt écrit
+    légitimement « PROFIL A : », un titre de structure et non une phrase
+    destinée au lecteur."""
+    prompt = main.construire_prompt_comparaison({"a": 1}, {"b": 2})
+    debut = prompt.index("Retourne UNIQUEMENT un JSON valide :")
+    exemple = [l for l in prompt[debut:].splitlines() if "✗" not in l]
+    assert any("divergences" in l for l in exemple), "bloc d'exemple introuvable"
+    # La clé doit être un champ réellement inspecté par le validateur :
+    # sous une clé inconnue, le contrôle passerait toujours (mutation M3).
+    fautes = main.fautes_de_marqueurs(
+        json.dumps({"message_poetique": "\n".join(exemple)}, ensure_ascii=False))
+    assert fautes == [], f"le prompt s'enfreint lui-même : {fautes}"

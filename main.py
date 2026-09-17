@@ -1249,7 +1249,7 @@ Retourne UNIQUEMENT un JSON valide :
     {{"dimension": "Curiosité", "score_a": 0.7, "score_b": 0.75, "description": "Partagent un goût pour l'apprentissage"}}
   ],
   "divergences": [
-    {{"dimension": "Rythme de vie", "score_a": 0.8, "score_b": 0.3, "description": "L'un est très actif, l'autre contemplatif"}},
+    {{"dimension": "Rythme de vie", "score_a": 0.8, "score_b": 0.3, "description": "{{A}} est très actif, {{B}} plus contemplatif"}},
     {{"dimension": "Goûts culturels", "score_a": 0.9, "score_b": 0.4, "description": "Des univers culturels très différents"}}
   ],
   "superpower": "Empathie profonde",
@@ -1259,6 +1259,9 @@ Retourne UNIQUEMENT un JSON valide :
     "Votre curiosité commune vous pousse-t-elle vers les mêmes sujets ou des directions opposées ?",
     "Comment vos rythmes de vie différents se complètent-ils au quotidien ?"
   ],
+  "//": "message_poetique — une image, et les marqueurs si elle attribue :",
+  "//": "  ✗ \"L'un allume sa lampe quand l'autre s'endort\"",
+  "//": "  ✓ \"{{A}} allume sa lampe quand {{B}} s'endort\"",
   "message_poetique": "Deux rivières qui coulent à des vitesses différentes, mais qui nourrissent le même territoire."
 }}"""
 
@@ -1535,20 +1538,19 @@ async def _analyser_comparaison(comparison_id: str, comparison: dict):
             print(f"⚠️ compare_generate {comparison_id} essai {essai} : JSON illisible ({e})")
             continue
 
-        fautes = fautes_de_marqueurs(json_match.group(0))
-        if not fautes:
-            result = json_match.group(0)
-            break
-        # Seules les fautes ATTRIBUTIVES arrivent ici : les tournures
-        # symétriques sont autorisées et ne déclenchent plus de relance.
-        print(f"⚠️ compare_generate {comparison_id} essai {essai} : "
-              f"marqueurs non respectés ({fautes[:3]})")
-        if essai == 2:
-            # On garde quand même : le JSON est valide, seule la rédaction
-            # est imparfaite. L'app affichera « l'un » tel quel — la
-            # substitution {A}/{B} ne corrige pas cette tournure (lot A5).
-            result = json_match.group(0)
+        # Le JSON est bon : on garde, quelle que soit la rédaction.
+        #
+        # Relancer sur une faute attributive a échoué 4 fois sur 4 le 17/09 :
+        # le modèle refait la même tournure, et l'utilisateur attend deux fois
+        # plus longtemps pour rien. La relance ne sert plus qu'à ce qu'elle
+        # répare vraiment — un JSON illisible ou une réponse tronquée.
+        result = json_match.group(0)
+        fautes = fautes_de_marqueurs(result)
+        if fautes:
+            print(f"⚠️ compare_generate {comparison_id} essai {essai} : "
+                  f"marqueurs non respectés, conservé quand même ({fautes[:3]})")
             COMPTEUR_COMPARAISONS["conservees_avec_fautes"] += 1
+        break
     # Décision L : les vecteurs ne vivent que le temps de l'analyse. On les
     # met à null dans la MÊME écriture que le statut — pas dans un appel
     # d'après, qui pourrait ne jamais arriver.
