@@ -1129,15 +1129,39 @@ async def get_pending_comparisons(my_code: str, x_app_secret: str = Header(None)
     })
     return {"comparisons": comparisons}
 
-async def analyze_comparison(comparison_id: str):
-    comparison = await sb_get_one('comparisons', {"id": f"eq.{comparison_id}", "select": "*"})
-    if not comparison: return
-    from_vector = json.loads(comparison['from_vector'])
-    to_vector   = json.loads(comparison['to_vector'])
-    prompt = f"""Tu es un expert en psychologie et compatibilité interpersonnelle.
+# Champs de texte d'une analyse de comparaison : ceux que la personne lit.
+def construire_prompt_comparaison(from_vector, to_vector) -> str:
+    """Builds the comparison prompt. Takes the two vectors and nothing
+    else — no code, no first name: the prompt promises anonymous profiles
+    and that promise is kept here.
+
+    @param from_vector: The initiator's vector.
+    @param to_vector: The responder's vector.
+    @returns: The prompt.
+
+    ---
+
+    Bâtit le prompt de comparaison. Prend les deux vecteurs et rien
+    d'autre — ni code, ni prénom : le prompt annonce des profils
+    anonymes, et c'est ici que la promesse se tient.
+
+    @param from_vector: Le vecteur de l'initiateur.
+    @param to_vector: Le vecteur du répondant.
+    @returns: Le prompt.
+    """
+    return f"""Tu es un expert en psychologie et compatibilité interpersonnelle.
 Compare ces deux profils psychométriques anonymes et génère une analyse de convergences et divergences.
 PROFIL A : {json.dumps(from_vector)}
 PROFIL B : {json.dumps(to_vector)}
+
+RÈGLE ABSOLUE DE RÉDACTION — Désignez les deux personnes exclusivement par les
+marqueurs {{A}} et {{B}}, jamais par "l'un"/"l'autre", jamais par "A"/"B" nus,
+jamais par un prénom. Chaque champ de texte ("description", "superpower",
+"tension", "questions_conversation", "message_poetique") doit employer {{A}} ou
+{{B}} dès qu'il désigne quelqu'un. Exemple attendu : "{{A}} avance vite quand
+{{B}} prend le temps de regarder." L'application remplacera ensuite ces
+marqueurs par les vrais noms ; elle ne peut pas deviner qui est "l'un".
+
 Retourne UNIQUEMENT un JSON valide :
 {{
   "score_global": 75,
@@ -1161,18 +1185,106 @@ Retourne UNIQUEMENT un JSON valide :
   ],
   "message_poetique": "Deux rivières qui coulent à des vitesses différentes, mais qui nourrissent le même territoire."
 }}"""
+
+
+CHAMPS_TEXTE_COMPARAISON = ("description", "superpower", "tension",
+                            "questions_conversation", "message_poetique")
+
+# Façons interdites de désigner quelqu'un : un « A » ou un « B » nu (hors
+# accolades), et les tournures qui ne disent pas de qui on parle.
+MOTIFS_INTERDITS = (
+    re.compile(r"(?<!\{)\bA\b(?!\})"),
+    re.compile(r"(?<!\{)\bB\b(?!\})"),
+    re.compile(r"\bl['’]un\b", re.IGNORECASE),
+    re.compile(r"\bl['’]autre\b", re.IGNORECASE),
+)
+
+
+def fautes_de_marqueurs(result_json: str) -> list:
+    """Lists the text fields naming people in a way the app cannot resolve.
+
+    The app replaces {A} and {B} with real names. "l'un", "l'autre" or a bare
+    "A" leave it with nothing to replace — the reader then sees a sentence
+    about two strangers.
+
+    @param result_json: The analysis, as JSON text.
+    @returns: One entry per offending field, empty when the answer is clean.
+
+    ---
+
+    Liste les champs de texte qui nomment les personnes d'une façon que
+    l'app ne saura pas résoudre.
+
+    L'app remplace {A} et {B} par les vrais noms. « l'un », « l'autre » ou un
+    « A » nu ne lui laissent rien à remplacer — le lecteur voit alors une
+    phrase qui parle de deux inconnus.
+
+    @param result_json: L'analyse, en texte JSON.
+    @returns: Une entrée par champ fautif, vide si la réponse est propre.
+    """
+    try:
+        analyse = json.loads(result_json)
+    except Exception:
+        return []
+
+    fautes = []
+
+    def examiner(chemin: str, valeur):
+        if isinstance(valeur, str):
+            for motif in MOTIFS_INTERDITS:
+                if motif.search(valeur):
+                    fautes.append(f"{chemin} : « {valeur[:60]} »")
+                    return
+        elif isinstance(valeur, list):
+            for i, element in enumerate(valeur):
+                examiner(f"{chemin}[{i}]", element)
+        elif isinstance(valeur, dict):
+            for cle, element in valeur.items():
+                if cle in CHAMPS_TEXTE_COMPARAISON:
+                    examiner(f"{chemin}.{cle}" if chemin else cle, element)
+
+    for cle, valeur in (analyse.items() if isinstance(analyse, dict) else []):
+        if cle in CHAMPS_TEXTE_COMPARAISON:
+            examiner(cle, valeur)
+        elif isinstance(valeur, list):
+            for i, element in enumerate(valeur):
+                examiner(f"{cle}[{i}]", element)
+    return fautes
+
+
+async def analyze_comparison(comparison_id: str):
+    comparison = await sb_get_one('comparisons', {"id": f"eq.{comparison_id}", "select": "*"})
+    if not comparison: return
+    from_vector = json.loads(comparison['from_vector'])
+    to_vector   = json.loads(comparison['to_vector'])
+    prompt = construire_prompt_comparaison(from_vector, to_vector)
     # Pas de requête HTTP directe ici (tâche de fond) donc pas de
     # x-device-token disponible — on utilise from_code, déjà l'identifiant
     # anonyme de la comparaison en base, dans le même rôle.
-    response = await call_model(
-        messages=[{"role": "user", "content": prompt}], max_tokens=2000,
-        purpose="compare_generate", client_ref=comparison.get('from_code'),
-    )
-    data = response.json()
-    result_text = data['content'][0]['text']
-    json_match = re.search(r'\{[\s\S]*\}', result_text)
-    if json_match:
-        result = json_match.group(0)
+    # Deux essais au plus : un modèle oublie parfois la consigne, et une
+    # analyse qui dit « l'un » au lieu de « {A} » est illisible une fois
+    # affichée — l'app ne peut pas deviner de qui il s'agit (C-37).
+    result = None
+    for essai in (1, 2):
+        response = await call_model(
+            messages=[{"role": "user", "content": prompt}], max_tokens=2000,
+            purpose="compare_generate", client_ref=comparison.get('from_code'),
+        )
+        data = response.json()
+        result_text = (data.get('content') or [{}])[0].get('text', '')
+        json_match = re.search(r'\{[\s\S]*\}', result_text)
+        if not json_match:
+            continue
+        fautes = fautes_de_marqueurs(json_match.group(0))
+        if not fautes:
+            result = json_match.group(0)
+            break
+        print(f"⚠️ compare_generate essai {essai} : marqueurs non respectés ({fautes[:3]})")
+        if essai == 2:
+            # On garde quand même : une analyse imparfaite vaut mieux qu'un
+            # écran vide, et l'app affiche les marqueurs qu'elle trouve.
+            result = json_match.group(0)
+    if result:
         await sb_patch('comparisons', {"id": f"eq.{comparison_id}"}, {"status": "completed", "result": result})
         for code_field in ['from_code', 'to_code']:
             token_row = await sb_get_one('push_tokens', {"my_code": f"eq.{comparison[code_field]}"})
