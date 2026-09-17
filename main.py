@@ -21,7 +21,8 @@ from rc_webapp import RC_WEBAPP_HTML
 # Tout appel à un fournisseur passe par model_client. Les URL, les clés et
 # le choix du prestataire n'existent que là-bas ; un test du dépôt échoue si
 # l'un d'eux réapparaît ici.
-from model_client import call_model, embed_texts, estimate_cost_usd, set_usage_logger, timeout_for, provider_for
+from model_client import (call_model, embed_texts, estimate_cost_usd, set_usage_logger,
+                          timeout_for, provider_for, MODEL_MAX_TOKENS_COMPARE)
 
 app = FastAPI()
 app.add_middleware(
@@ -1148,9 +1149,24 @@ async def get_comparison_status(comparison_id: str, x_app_secret: str = Header(N
     comparison = await sb_get_one('comparisons', {"id": f"eq.{comparison_id}", "select": "*"})
     if not comparison:
         raise HTTPException(status_code=404, detail="Comparaison non trouvée")
+    resultat = None
+    if comparison.get('result'):
+        try:
+            resultat = json.loads(comparison['result'])
+        except Exception as e:
+            # Un résultat illisible en base (tronqué le 17/09) faisait
+            # répondre 500 à chaque sondage : deux téléphones interrogeaient
+            # une route qui plantait, sans fin. On referme plutôt la
+            # comparaison, et on le dit.
+            print(f"❌ compare/status {comparison_id} : résultat illisible ({e}) — comparaison refermée")
+            await sb_patch('comparisons', {"id": f"eq.{comparison_id}"},
+                           {"status": "failed", "result": None,
+                            "from_vector": None, "to_vector": None})
+            return {"status": "failed", "result": None,
+                    "expires_at": comparison.get('expires_at')}
     return {
         "status":     comparison['status'],
-        "result":     json.loads(comparison['result']) if comparison.get('result') else None,
+        "result":     resultat,
         "expires_at": comparison.get('expires_at'),
     }
 
@@ -1196,6 +1212,10 @@ jamais par un prénom. Chaque champ de texte ("description", "superpower",
 {{B}} prend le temps de regarder." L'application remplacera ensuite ces
 marqueurs par les vrais noms ; elle ne peut pas deviner qui est "l'un".
 
+LONGUEUR — Soyez bref : deux ou trois phrases par "description", trois
+questions dans "questions_conversation", pas plus. Une analyse coupée en
+plein milieu ne s'affiche pas ; mieux vaut court et entier que long et perdu.
+
 Retourne UNIQUEMENT un JSON valide :
 {{
   "score_global": 75,
@@ -1229,7 +1249,7 @@ CHAMPS_TEXTE_COMPARAISON = ("description", "superpower", "tension",
 MOTIFS_INTERDITS = (
     re.compile(r"(?<!\{)\bA\b(?!\})"),
     re.compile(r"(?<!\{)\bB\b(?!\})"),
-    re.compile(r"\bl['’]un\b", re.IGNORECASE),
+    re.compile(r"\bl['’]une?\b", re.IGNORECASE),
     re.compile(r"\bl['’]autre\b", re.IGNORECASE),
 )
 
@@ -1396,23 +1416,48 @@ async def _analyser_comparaison(comparison_id: str, comparison: dict):
             print(f"⚠️ compare_generate {comparison_id} : budget épuisé, relance abandonnée")
             break
         response = await call_model(
-            messages=[{"role": "user", "content": prompt}], max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=MODEL_MAX_TOKENS_COMPARE,
             purpose="compare_generate", client_ref=comparison.get('from_code'),
             timeout=min(delai_appel, max(reste, 1)),
         )
         data = response.json()
         result_text = (data.get('content') or [{}])[0].get('text', '')
+        motif_fin = data.get('stop_reason')
+        print(f"ℹ️ compare_generate {comparison_id} essai {essai} : "
+              f"{len(result_text)} caractères, stop_reason={motif_fin!r}")
+
+        # Une réponse coupée par le plafond de jetons n'est PAS un succès :
+        # son JSON s'arrête au milieu d'une chaîne. C'est ce qui a mis un
+        # résultat illisible en base le 17/09.
+        if motif_fin == 'max_tokens':
+            print(f"⚠️ compare_generate {comparison_id} essai {essai} : réponse tronquée (max_tokens)")
+            continue
+
         json_match = re.search(r'\{[\s\S]*\}', result_text)
         if not json_match:
+            print(f"⚠️ compare_generate {comparison_id} essai {essai} : aucun JSON dans la réponse")
             continue
+
+        # On relit le JSON AVANT toute écriture. `fautes_de_marqueurs` rend
+        # une liste vide sur un texte illisible — « aucune faute » ne veut
+        # pas dire « exploitable », et c'est cette confusion qui a laissé
+        # passer la réponse tronquée.
+        try:
+            json.loads(json_match.group(0))
+        except Exception as e:
+            print(f"⚠️ compare_generate {comparison_id} essai {essai} : JSON illisible ({e})")
+            continue
+
         fautes = fautes_de_marqueurs(json_match.group(0))
         if not fautes:
             result = json_match.group(0)
             break
-        print(f"⚠️ compare_generate essai {essai} : marqueurs non respectés ({fautes[:3]})")
+        print(f"⚠️ compare_generate {comparison_id} essai {essai} : marqueurs non respectés ({fautes[:3]})")
         if essai == 2:
-            # On garde quand même : une analyse imparfaite vaut mieux qu'un
-            # écran vide, et l'app affiche les marqueurs qu'elle trouve.
+            # On garde quand même : le JSON est valide, seule la rédaction
+            # est imparfaite. L'app affichera « l'un » tel quel — la
+            # substitution {A}/{B} ne corrige pas cette tournure (lot A5).
             result = json_match.group(0)
     # Décision L : les vecteurs ne vivent que le temps de l'analyse. On les
     # met à null dans la MÊME écriture que le statut — pas dans un appel

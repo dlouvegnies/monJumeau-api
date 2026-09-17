@@ -83,3 +83,53 @@ def test_une_reponse_illisible_ne_leve_pas():
     """Un JSON cassé n'est pas l'affaire de cette fonction : elle rend une
     liste vide et laisse l'appelant décider."""
     assert main.fautes_de_marqueurs("ceci n'est pas du JSON") == []
+
+
+# ── Frontières de mot : ce qui ressemble à une faute et n'en est pas ──────
+# Vérifié le 17/09 sur la comparaison 0F90CED0, où un faux positif était
+# soupçonné sur « l'autonomie ». Il n'y en avait pas : le motif porte déjà
+# ses frontières de mot. Ces tests le figent.
+
+import pytest
+
+
+@pytest.mark.parametrize("texte", [
+    "{A} apprécie la structure et {B} l'autonomie",
+    "{A} et {B} partagent l'unité de vue",
+    "L'autonomie de {A} répond à l'unanimité de {B}",
+    "{A} lit l'Iliade, {B} l'Odyssée",
+])
+def test_ces_mots_ne_sont_pas_des_fautes(texte):
+    """« l'autonomie », « l'unité », « l'unanimité » commencent comme
+    « l'un »/« l'autre » sans en être : la frontière de mot les distingue."""
+    assert main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False)) == []
+
+
+@pytest.mark.parametrize("texte", [
+    "L'un allume, l'autre éteint",
+    "l'autre jour, {A} a dit",
+    "L'une avance, {B} attend",
+    "l'un des deux préfère le calme",
+    "{A} est direct, l'autre est nuancé",
+])
+def test_ces_tournures_sont_bien_des_fautes(texte):
+    """Y compris en début de phrase, avec une majuscule."""
+    assert main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False)) != []
+
+
+def test_l_une_est_attrapee_comme_l_un():
+    """« L'une … l'autre » est la même tournure ; elle échappait au motif
+    avant le 17/09 (la frontière après « un » butait sur le « e »)."""
+    texte = "L'une regarde loin, {B} regarde près"
+    assert main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False)) != []
+
+
+def test_le_prompt_demande_de_rester_bref():
+    """Une analyse coupée ne s'affiche pas : la longueur est un choix."""
+    prompt = main.construire_prompt_comparaison({"a": 1}, {"b": 2})
+    assert "LONGUEUR" in prompt
+    assert "deux ou trois phrases" in prompt and "trois\nquestions" in prompt
+
+
+def test_la_place_de_l_analyse_vient_de_la_configuration():
+    assert main.MODEL_MAX_TOKENS_COMPARE >= 4000

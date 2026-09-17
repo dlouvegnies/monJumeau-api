@@ -331,3 +331,136 @@ def test_la_tache_de_fond_recupere_son_exception():
     i_creation = source.index("asyncio.create_task(analyze_comparison(")
     i_rappel = source.index("add_done_callback(_recuperer_exception)")
     assert i_rappel > i_creation and i_rappel - i_creation < 200
+
+
+# ── Jamais un résultat illisible en base (défaut 0F90CED0, 17/09) ────────
+
+def _reponse(texte, stop_reason="end_turn"):
+    class R:
+        status_code = 200
+        def json(self):
+            return {"content": [{"text": texte}], "stop_reason": stop_reason}
+    return R()
+
+
+@pytest.mark.asyncio
+async def test_une_reponse_tronquee_ne_devient_jamais_completed(base, monkeypatch):
+    """Le défaut exact : `max_tokens` atteint, JSON coupé au milieu d'une
+    chaîne, stocké tel quel — et /compare/status répondait 500 à chaque
+    sondage."""
+    base.lignes = [comparaison()]
+    coupe = '{"score_global": 75, "message_poetique": "{A} allume et {B}'
+    pushs = []
+
+    async def modele_tronque(**kwargs):
+        return _reponse(coupe, stop_reason="max_tokens")
+
+    async def faux_push(**kwargs):
+        pushs.append(kwargs)
+
+    async def faux_token(table, params):
+        if table == "push_tokens":
+            return {"push_token": "jeton"}
+        return await base.get_one(table, params)
+
+    monkeypatch.setattr(main, "call_model", modele_tronque)
+    monkeypatch.setattr(main, "send_push_notification", faux_push)
+    monkeypatch.setattr(main, "sb_get_one", faux_token)
+    await main.analyze_comparison("c1")
+
+    ligne = base.lignes[0]
+    assert ligne["status"] == "failed"
+    assert ligne.get("result") in (None, "")
+    assert ligne["from_vector"] is None and ligne["to_vector"] is None
+    assert len(pushs) == 2
+
+
+@pytest.mark.asyncio
+async def test_un_json_illisible_sans_stop_reason_est_refuse_aussi(base, monkeypatch):
+    """Même sans l'indice `max_tokens`, un JSON qu'on ne peut pas relire ne
+    doit jamais être écrit : « aucune faute de marqueur » ne veut pas dire
+    « exploitable »."""
+    base.lignes = [comparaison()]
+
+    async def modele_casse(**kwargs):
+        return _reponse('{"score_global": 75, "message_poetique": "{A} et')
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele_casse)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    await main.analyze_comparison("c1")
+    assert base.lignes[0]["status"] == "failed"
+    assert base.lignes[0].get("result") in (None, "")
+
+
+@pytest.mark.asyncio
+async def test_une_troncature_au_premier_essai_laisse_sa_chance_au_second(base, monkeypatch):
+    """La relance sert d'abord à ça : le second essai peut réussir."""
+    base.lignes = [comparaison()]
+    propre = json.dumps({"score_global": 80, "message_poetique": "{A} et {B}."}, ensure_ascii=False)
+    essais = {"n": 0}
+
+    async def modele(**kwargs):
+        essais["n"] += 1
+        if essais["n"] == 1:
+            return _reponse('{"score_global": 80, "message', stop_reason="max_tokens")
+        return _reponse(propre)
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    await main.analyze_comparison("c1")
+    assert essais["n"] == 2
+    assert base.lignes[0]["status"] == "completed"
+    assert base.lignes[0]["from_vector"] is None
+
+
+# ── /compare/status ne plante jamais ─────────────────────────────────────
+
+def test_status_sur_un_resultat_illisible_repond_failed(client, auth_headers, base):
+    """Avant : 500 à chaque sondage, sans fin. Après : la comparaison se
+    referme et le téléphone l'apprend."""
+    base.lignes = [comparaison(status="completed",
+                               result='{"score_global": 75, "message_poetique": "{A} et')]
+    r = client.get("/compare/status/c1", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "failed"
+    assert r.json()["result"] is None
+    ligne = base.lignes[0]
+    assert ligne["status"] == "failed"
+    assert ligne["result"] is None
+    assert ligne["from_vector"] is None and ligne["to_vector"] is None
+
+
+def test_status_sur_un_resultat_lisible_reste_inchange(client, auth_headers, base):
+    base.lignes = [comparaison(status="completed", result='{"score_global": 75}')]
+    r = client.get("/compare/status/c1", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "completed"
+    assert r.json()["result"] == {"score_global": 75}
+
+
+@pytest.mark.asyncio
+async def test_une_reponse_coupee_mais_au_JSON_valide_est_refusee_aussi(base, monkeypatch):
+    """Une troncature ne produit pas toujours un JSON cassé : le modèle peut
+    s'arrêter juste après une accolade fermante, et rendre un objet valide
+    mais AMPUTÉ (sans divergences, sans questions). `stop_reason` est le seul
+    indice fiable — il faut donc le regarder pour lui-même."""
+    base.lignes = [comparaison()]
+    ampute = json.dumps({"score_global": 75, "message_poetique": "{A} et {B}."}, ensure_ascii=False)
+
+    async def modele_coupe(**kwargs):
+        return _reponse(ampute, stop_reason="max_tokens")
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele_coupe)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    await main.analyze_comparison("c1")
+    assert base.lignes[0]["status"] == "failed", "une réponse coupée ne doit jamais devenir completed"
+    assert base.lignes[0].get("result") in (None, "")

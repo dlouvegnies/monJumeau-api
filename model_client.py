@@ -67,6 +67,12 @@ MODEL_TIMEOUT_SECONDS_MISTRAL = float(
 # Vectoriser est rapide : inutile d'attendre deux minutes pour un échec.
 MODEL_TIMEOUT_SECONDS_EMBED = float(os.environ.get("MODEL_TIMEOUT_SECONDS_EMBED", "30"))
 
+# Place laissée à l'analyse d'une comparaison. 2000 jetons — le défaut hérité
+# — ont tronqué une réponse en production le 17/09 : le JSON s'arrêtait au
+# milieu d'une chaîne, et un résultat illisible s'est retrouvé en base. La
+# longueur de sortie doit être un choix, pas un reste.
+MODEL_MAX_TOKENS_COMPARE = int(os.environ.get("MODEL_MAX_TOKENS_COMPARE", "4000"))
+
 
 def timeout_for(provider: str) -> float:
     """How long to wait for one provider, from configuration.
@@ -256,8 +262,11 @@ async def _appeler_mistral(*, messages, max_tokens, system, model, timeout):
     corps = brute.json()
     texte = ((corps.get("choices") or [{}])[0].get("message") or {}).get("content", "")
     jetons = corps.get("usage") or {}
+    # `length` chez Mistral = `max_tokens` chez Anthropic : réponse coupée.
+    fin = ((corps.get("choices") or [{}])[0]).get("finish_reason")
     return ModelResponse(200, {
         "content": [{"type": "text", "text": texte}],
+        "stop_reason": "max_tokens" if fin == "length" else fin,
         "usage": {
             "input_tokens": jetons.get("prompt_tokens", 0),
             "output_tokens": jetons.get("completion_tokens", 0),
