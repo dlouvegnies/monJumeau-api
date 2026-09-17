@@ -1213,13 +1213,26 @@ Compare ces deux profils psychométriques anonymes et génère une analyse de co
 PROFIL A : {json.dumps(from_vector)}
 PROFIL B : {json.dumps(to_vector)}
 
-RÈGLE ABSOLUE DE RÉDACTION — Désignez les deux personnes exclusivement par les
-marqueurs {{A}} et {{B}}, jamais par "l'un"/"l'autre", jamais par "A"/"B" nus,
-jamais par un prénom. Chaque champ de texte ("description", "superpower",
-"tension", "questions_conversation", "message_poetique") doit employer {{A}} ou
-{{B}} dès qu'il désigne quelqu'un. Exemple attendu : "{{A}} avance vite quand
-{{B}} prend le temps de regarder." L'application remplacera ensuite ces
-marqueurs par les vrais noms ; elle ne peut pas deviner qui est "l'un".
+RÉDACTION — Chaque fois que vous attribuez quelque chose à l'une des deux
+personnes, nommez-la par son marqueur, {{A}} ou {{B}} :
+
+  ✗ "l'un démarre au crépuscule, l'autre à l'aube"
+  ✓ "{{A}} démarre au crépuscule, {{B}} à l'aube"
+
+  ✗ "A structure, B improvise"
+  ✓ "{{A}} structure, {{B}} improvise"
+
+L'application remplacera ces marqueurs par les vrais noms ; elle ne peut pas
+deviner qui est "l'un". Un prénom ne doit jamais apparaître : vous ne les
+connaissez pas.
+
+En revanche, les tournures SYMÉTRIQUES sont les bienvenues, car elles ne
+désignent personne en particulier : "ni l'un ni l'autre", "l'un et l'autre",
+"l'un comme l'autre", "ils s'ajustent l'un à l'autre", "chacun". Écrivez-les
+naturellement.
+
+Cela vaut pour tous les champs de texte : "description", "superpower",
+"tension", "questions_conversation", "message_poetique".
 
 LONGUEUR — Soyez bref : deux ou trois phrases par "description", trois
 questions dans "questions_conversation", pas plus. Une analyse coupée en
@@ -1253,14 +1266,66 @@ Retourne UNIQUEMENT un JSON valide :
 CHAMPS_TEXTE_COMPARAISON = ("description", "superpower", "tension",
                             "questions_conversation", "message_poetique")
 
-# Façons interdites de désigner quelqu'un : un « A » ou un « B » nu (hors
-# accolades), et les tournures qui ne disent pas de qui on parle.
+# ── Ce qui est reproché, et ce qui ne l'est pas ──────────────────────────
+#
+# « l'un » et « l'autre » ne sont pas fautifs en soi. Ils le deviennent quand
+# ils ATTRIBUENT quelque chose à quelqu'un — « l'un démarre », « l'autre
+# préfère » — parce que l'app ne saura pas à qui mettre « vous ».
+#
+# Les tournures SYMÉTRIQUES, elles, ne désignent personne : « ni l'un ni
+# l'autre », « l'un et l'autre », « l'un comme l'autre », « l'un à l'autre ».
+# Rien à substituer, rien de perdu — les interdire poussait le modèle à des
+# contorsions, et faisait relancer deux analyses parfaitement lisibles
+# (comparaison 0A139396, 17/09 : deux essais pour rien, temps doublé).
+
+# Les mots qui relient « l'un » à « l'autre » dans une tournure symétrique.
+_LIAISONS = ("et|ou|comme|à|de|d['’]|pour|avec|vers|chez|sans|contre|dans|"
+             "sur|envers|après|avant|près de|loin de|face à|par")
+
+MOTIFS_SYMETRIQUES = (
+    # « ni l'un ni l'autre »
+    re.compile(r"\bni\s+l['’]une?\s+ni\s+l['’]autre\b", re.IGNORECASE),
+    # « l'un et l'autre », « l'un comme l'autre », « l'une de l'autre »…
+    re.compile(rf"\bl['’]une?\s+(?:{_LIAISONS})\s*l['’]autre\b", re.IGNORECASE),
+    # « s'écoutent l'un l'autre »
+    re.compile(r"\bl['’]une?\s+l['’]autre\b", re.IGNORECASE),
+)
+
+# Ce qui reste après avoir mis les tournures symétriques de côté : un « l'un »
+# ou un « l'autre » qui attribue, et un « A » ou un « B » nu (hors accolades).
 MOTIFS_INTERDITS = (
     re.compile(r"(?<!\{)\bA\b(?!\})"),
     re.compile(r"(?<!\{)\bB\b(?!\})"),
     re.compile(r"\bl['’]une?\b", re.IGNORECASE),
     re.compile(r"\bl['’]autre\b", re.IGNORECASE),
 )
+
+
+def _sans_tournures_symetriques(texte: str) -> str:
+    """Blanks out the symmetric turns of phrase, so only the attributive uses
+    of "l'un" / "l'autre" remain to be judged.
+
+    Replaced by spaces of the same length, not removed: the positions of what
+    is left stay true, and the log can quote the right fragment.
+
+    @param texte: The field's text.
+    @returns: The same text, symmetric turns blanked out.
+
+    ---
+
+    Efface les tournures symétriques, pour ne laisser à juger que les emplois
+    ATTRIBUTIFS de « l'un » / « l'autre ».
+
+    Remplacées par des espaces de même longueur, et non supprimées : les
+    positions de ce qui reste restent justes, et le journal peut citer le bon
+    fragment.
+
+    @param texte: Le texte du champ.
+    @returns: Le même texte, tournures symétriques effacées.
+    """
+    for motif in MOTIFS_SYMETRIQUES:
+        texte = motif.sub(lambda m: " " * len(m.group(0)), texte)
+    return texte
 
 
 def fautes_de_marqueurs(result_json: str) -> list:
@@ -1294,8 +1359,9 @@ def fautes_de_marqueurs(result_json: str) -> list:
 
     def examiner(chemin: str, valeur):
         if isinstance(valeur, str):
+            a_juger = _sans_tournures_symetriques(valeur)
             for motif in MOTIFS_INTERDITS:
-                trouve = motif.search(valeur)
+                trouve = motif.search(a_juger)
                 if trouve:
                     # Citer le FRAGMENT fautif, pas le début du champ : un
                     # extrait qui ne montre pas ce qu'on reproche envoie
@@ -1473,7 +1539,10 @@ async def _analyser_comparaison(comparison_id: str, comparison: dict):
         if not fautes:
             result = json_match.group(0)
             break
-        print(f"⚠️ compare_generate {comparison_id} essai {essai} : marqueurs non respectés ({fautes[:3]})")
+        # Seules les fautes ATTRIBUTIVES arrivent ici : les tournures
+        # symétriques sont autorisées et ne déclenchent plus de relance.
+        print(f"⚠️ compare_generate {comparison_id} essai {essai} : "
+              f"marqueurs non respectés ({fautes[:3]})")
         if essai == 2:
             # On garde quand même : le JSON est valide, seule la rédaction
             # est imparfaite. L'app affichera « l'un » tel quel — la

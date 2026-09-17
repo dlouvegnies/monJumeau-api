@@ -28,13 +28,27 @@ def test_le_prompt_ne_contient_ni_code_ni_prenom():
         assert identifiant not in prompt
 
 
-def test_le_prompt_impose_les_marqueurs():
-    """La consigne est explicite, et cite les champs concernés."""
+def test_le_prompt_montre_au_lieu_d_interdire():
+    """Une interdiction seule pousse le modèle vers des contorsions ; deux
+    exemples en face à face l'alignent. Constaté sur 0A139396 (17/09) : deux
+    essais rejetés pour des tournures parfaitement lisibles."""
     prompt = main.construire_prompt_comparaison({"a": 1}, {"b": 2})
     assert "{A}" in prompt and "{B}" in prompt
-    assert "jamais par un prénom" in prompt
+    assert "✗" in prompt and "✓" in prompt
+    assert "l'un démarre au crépuscule" in prompt      # le contre-exemple
+    assert "{A} démarre au crépuscule" in prompt       # et sa correction
+    assert "prénom ne doit jamais apparaître" in prompt
     for champ in ("description", "superpower", "tension", "questions_conversation", "message_poetique"):
         assert champ in prompt
+
+
+def test_le_prompt_autorise_explicitement_les_tournures_symetriques():
+    """Sans cette phrase, le modèle évite « ni l'un ni l'autre » et se
+    contorsionne pour rien."""
+    prompt = main.construire_prompt_comparaison({"a": 1}, {"b": 2})
+    assert "SYMÉTRIQUES" in prompt
+    assert "ni l'un ni l'autre" in prompt
+    assert "chacun" in prompt
 
 
 def test_une_reponse_conforme_ne_produit_aucune_faute():
@@ -156,3 +170,50 @@ def test_le_fragment_cite_tient_dans_une_ligne():
     fautes = main.fautes_de_marqueurs(json.dumps({"message_poetique": long}, ensure_ascii=False))
     assert len(fautes) == 1
     assert len(fautes[0]) < 120, fautes[0]
+
+
+
+# ── Symétrique ou attributif : les deux cas (0A139396, 17/09) ────────────
+# « l'un » et « l'autre » ne sont pas fautifs en soi. Ils le deviennent quand
+# ils ATTRIBUENT quelque chose à quelqu'un, car l'app ne saura pas à qui
+# mettre « vous ».
+
+@pytest.mark.parametrize("texte", [
+    "Ni l'un ni l'autre ne cède facilement",
+    "L'un et l'autre avancent à leur rythme",
+    "L'un comme l'autre cherchent la clarté",
+    "Ils s'ajustent l'un à l'autre",
+    "Ils se nourrissent l'un de l'autre",
+    "Chacun avance à son pas",
+])
+def test_les_tournures_symetriques_sont_autorisees(texte):
+    """Elles ne désignent personne : rien à substituer, rien de perdu."""
+    assert main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False)) == []
+
+
+@pytest.mark.parametrize("texte", [
+    "l'un démarre au crépuscule, l'autre à l'aube",
+    "{A} structure, l'autre préfère improviser",
+    "L'une avance, {B} attend",
+    "l'autre cherche la nouveauté",
+])
+def test_les_emplois_attributifs_restent_des_fautes(texte):
+    """Là, l'app ne saurait pas à qui mettre « vous »."""
+    assert main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False)) != []
+
+
+def test_une_phrase_mixte_ne_signale_que_la_part_attributive():
+    """La tournure symétrique est mise de côté, la faute reste visible."""
+    texte = "L'un et l'autre avancent, mais l'un ralentit plus vite"
+    fautes = main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False))
+    assert len(fautes) == 1
+    assert "ralentit" in fautes[0], fautes[0]
+
+
+def test_le_fragment_cite_reste_celui_du_texte_d_origine():
+    """Les tournures symétriques sont effacées par des espaces de même
+    longueur : les positions restent justes, donc l'extrait aussi."""
+    texte = "Ni l'un ni l'autre ne cède, pourtant l'autre finit par céder"
+    fautes = main.fautes_de_marqueurs(json.dumps({"message_poetique": texte}, ensure_ascii=False))
+    assert len(fautes) == 1
+    assert "finit par céder" in fautes[0], fautes[0]
