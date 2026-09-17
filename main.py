@@ -233,6 +233,9 @@ SALAIRE_LABELS = {
 
 CATEGORIES_WITHOUT_SUPABASE = ['health', 'science']
 REJECTED_EXPIRY_DAYS = 7
+# Filet : une comparaison dont le résultat n'a jamais été pris par les deux
+# téléphones ne survit pas à ce délai (décision L).
+COMPARISON_KEEP_DAYS = 30
 PENDING_EXPIRY_DAYS  = 14
 pays_autorises       = ['fra', 'cor', 'bre']
 spotify_token        = None
@@ -443,6 +446,14 @@ class RegisterAliasRequest(BaseModel):
 class RegisterPushRequest(BaseModel):
     my_code: str
     push_token: str
+
+class CompareAckRequest(BaseModel):
+    """Un téléphone déclare avoir pris le résultat d'une comparaison.
+    ---
+    One phone declares it has taken a comparison's result."""
+    comparison_id: str
+    my_code: str
+
 
 class CompareRequestModel(BaseModel):
     from_code: str
@@ -680,6 +691,23 @@ async def cleanup_old_requests():
             print("   ✅ Connection requests nettoyées")
             await sb_delete('rc_sessions', {"expires_at": f"lt.{iso_now()}"})
             print("   ✅ Sessions RC expirées supprimées")
+            # ── Comparaisons (décision L) ──
+            # Une comparaison porte les vecteurs de DEUX personnes : rien ici
+            # ne doit vivre plus longtemps que nécessaire.
+            #   refusée    → plus rien à en faire ;
+            #   en attente et expirée → y compris le vecteur de celui qui
+            #     avait accepté, et qui n'aura jamais de réponse ;
+            #   terminée ou en cours d'analyse depuis plus de 30 jours → le
+            #     filet, pour le téléphone qui ne revient jamais chercher son
+            #     résultat.
+            await sb_delete('comparisons', {"status": "eq.rejected"})
+            await sb_delete('comparisons', {"status": "eq.pending", "expires_at": f"lt.{iso_now()}"})
+            for statut in ("completed", "analyzing", "failed"):
+                await sb_delete('comparisons', {
+                    "status": f"eq.{statut}",
+                    "created_at": f"lt.{iso_days_ago(COMPARISON_KEEP_DAYS)}",
+                })
+            print("   ✅ Comparaisons expirées supprimées")
             await sb_delete('news_articles', {"published_at": f"gt.{iso_now()}"})
             print("   ✅ Articles à date future supprimés")
         except Exception as e:
@@ -1284,8 +1312,13 @@ async def analyze_comparison(comparison_id: str):
             # On garde quand même : une analyse imparfaite vaut mieux qu'un
             # écran vide, et l'app affiche les marqueurs qu'elle trouve.
             result = json_match.group(0)
+    # Décision L : les vecteurs ne vivent que le temps de l'analyse. On les
+    # met à null dans la MÊME écriture que le statut — pas dans un appel
+    # d'après, qui pourrait ne jamais arriver.
     if result:
-        await sb_patch('comparisons', {"id": f"eq.{comparison_id}"}, {"status": "completed", "result": result})
+        await sb_patch('comparisons', {"id": f"eq.{comparison_id}"},
+                       {"status": "completed", "result": result,
+                        "from_vector": None, "to_vector": None})
         for code_field in ['from_code', 'to_code']:
             token_row = await sb_get_one('push_tokens', {"my_code": f"eq.{comparison[code_field]}"})
             if token_row:
@@ -1295,6 +1328,60 @@ async def analyze_comparison(comparison_id: str):
                     body='Découvrez vos points communs et différences !',
                     data={'screen': 'CompareResult', 'comparison_id': comparison_id}
                 )
+    else:
+        # Échec : aucune analyse exploitable. Les vecteurs partent quand même
+        # — ils ne serviront plus, et les garder serait les garder pour rien.
+        await sb_patch('comparisons', {"id": f"eq.{comparison_id}"},
+                       {"status": "failed", "from_vector": None, "to_vector": None})
+
+
+@app.post("/compare/ack")
+async def acknowledge_comparison(req: CompareAckRequest, x_app_secret: str = Header(None)):
+    """Records that one phone has taken the result, and deletes the row once
+    both have.
+
+    The result lives on the phones; the server only carried it. Idempotent:
+    calling it twice from the same side changes nothing, and calling it on a
+    row already gone answers success — a phone must never be stuck retrying.
+
+    @param req: comparison_id and my_code.
+    @returns: success, and whether the row is gone.
+
+    ---
+
+    Enregistre qu'un téléphone a pris le résultat, et supprime la ligne dès
+    que les deux l'ont fait.
+
+    Le résultat vit sur les téléphones ; le serveur n'a fait que le
+    transporter. Idempotente : appelée deux fois du même côté elle ne change
+    rien, et appelée sur une ligne déjà partie elle répond succès — un
+    téléphone ne doit jamais rester coincé à réessayer.
+
+    @param req: comparison_id et my_code.
+    @returns: succès, et si la ligne a disparu.
+    """
+    verify_secret(x_app_secret)
+    comparison = await sb_get_one('comparisons', {"id": f"eq.{req.comparison_id}", "select": "*"})
+    if not comparison:
+        # Déjà supprimée : c'est le but, pas une erreur.
+        return {"success": True, "deleted": True}
+
+    if comparison.get('from_code') == req.my_code:
+        champ = 'from_fetched_at'
+    elif comparison.get('to_code') == req.my_code:
+        champ = 'to_fetched_at'
+    else:
+        raise HTTPException(status_code=403, detail="Cette comparaison n'est pas la vôtre.")
+
+    if not comparison.get(champ):
+        await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"}, {champ: iso_now()})
+        comparison[champ] = iso_now()
+
+    if comparison.get('from_fetched_at') and comparison.get('to_fetched_at'):
+        await sb_delete('comparisons', {"id": f"eq.{req.comparison_id}"})
+        return {"success": True, "deleted": True}
+    return {"success": True, "deleted": False}
+
 
 # ── ENDPOINTS JOBS ──
 @app.post("/jobs/adzuna")
