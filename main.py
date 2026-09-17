@@ -16,6 +16,11 @@ import html
 from urllib.parse import urlparse
 from fastapi.responses import HTMLResponse
 from rc_webapp import RC_WEBAPP_HTML
+# ── Porte unique vers les modèles de langage (lot A1, décision R) ──
+# Tout appel à un fournisseur passe par model_client. Les URL, les clés et
+# le choix du prestataire n'existent que là-bas ; un test du dépôt échoue si
+# l'un d'eux réapparaît ici.
+from model_client import call_model, embed_texts, estimate_cost_usd, set_usage_logger
 
 app = FastAPI()
 app.add_middleware(
@@ -50,9 +55,7 @@ NEWS_API_KEY  = os.environ.get("NEWS_API_KEY")
 NEWS_API_URL  = "https://newsapi.org/v2"
 SUPABASE_URL  = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY  = os.environ.get("SUPABASE_KEY")
-MISTRAL_API_KEY    = os.environ.get("MISTRAL_API_KEY")
-MISTRAL_EMBED_URL   = "https://api.mistral.ai/v1/embeddings"
-MISTRAL_EMBED_MODEL = "mistral-embed"
+# Clés et modèles des fournisseurs : voir model_client.py (lot A1).
 
 # ── CONSTANTES ──
 CAT_MAP = {
@@ -383,16 +386,7 @@ async def sb_get_one(table: str, params: dict):
 # HTTP directe, le my_code déjà présent en base pour cette comparaison —
 # même famille d'identifiant anonyme, juste une source différente selon le
 # contexte d'appel.
-CLAUDE_PRICING = {
-    # $ par million de tokens (entrée, sortie) — tarifs officiels Anthropic.
-    # Seul "claude-sonnet-4-6" est utilisé dans ce fichier à ce jour, mais la
-    # table reste prête si un autre modèle est introduit plus tard.
-    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
-}
-
-def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    pricing = CLAUDE_PRICING.get(model, {"input": 0.0, "output": 0.0})
-    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+# Tarifs et estimation de coût : voir model_client.py (lot A1).
 
 async def log_ai_usage(client_ref, purpose: str, model: str, usage: dict):
     """Journalise un appel Claude dans ai_usage_log — fire-and-forget,
@@ -413,31 +407,9 @@ async def log_ai_usage(client_ref, purpose: str, model: str, usage: dict):
     except Exception as e:
         print(f"[ai_usage] log échoué ({purpose}): {e}")
 
-async def call_claude(*, messages, max_tokens, purpose: str, system: str = None,
-                       client_ref=None, model: str = "claude-sonnet-4-6", timeout: float = 30.0):
-    """Remplace un `client.post("https://api.anthropic.com/v1/messages", ...)`
-    direct : même comportement (retourne l'objet httpx.Response tel quel,
-    donc `.status_code` / `.json()` fonctionnent exactement comme avant à
-    chaque site d'appel), avec en plus la journalisation automatique du
-    coût via `log_ai_usage`. `purpose` identifie la fonctionnalité
-    (ex. "chat_reply", "capture_extract") pour pouvoir comparer les coûts
-    entre fonctionnalités, pas seulement le total."""
-    payload = {"model": model, "max_tokens": max_tokens, "messages": messages}
-    if system is not None:
-        payload["system"] = system
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json=payload,
-            timeout=timeout,
-        )
-    try:
-        usage = response.json().get("usage") or {}
-        asyncio.create_task(log_ai_usage(client_ref, purpose, model, usage))
-    except Exception as e:
-        print(f"[ai_usage] extraction usage échouée ({purpose}): {e}")
-    return response
+# `log_ai_usage` a besoin de sb_post, qui vit ici ; `call_model` ne doit
+# pas dépendre de la base. On l'injecte donc plutôt que de l'importer.
+set_usage_logger(log_ai_usage)
 
 def iso_now() -> str:
     """Timestamp UTC actuel en ISO 8601 — PostgREST attend une valeur littérale, pas une expression SQL comme NOW()."""
@@ -974,7 +946,7 @@ async def recommend(req: MessageRequest, x_app_secret: str = Header(None), x_dev
     verify_secret(x_app_secret)
     if not CLAUDE_API_KEY:
         raise HTTPException(status_code=500, detail="Clé API manquante")
-    response = await call_claude(
+    response = await call_model(
         system=req.system, messages=req.messages, max_tokens=req.max_tokens,
         purpose="recommend", client_ref=x_device_token,
     )
@@ -1192,7 +1164,7 @@ Retourne UNIQUEMENT un JSON valide :
     # Pas de requête HTTP directe ici (tâche de fond) donc pas de
     # x-device-token disponible — on utilise from_code, déjà l'identifiant
     # anonyme de la comparaison en base, dans le même rôle.
-    response = await call_claude(
+    response = await call_model(
         messages=[{"role": "user", "content": prompt}], max_tokens=2000,
         purpose="compare_generate", client_ref=comparison.get('from_code'),
     )
@@ -1489,7 +1461,7 @@ async def get_recipe_details(req: RecipeRequest, x_app_secret: str = Header(None
             )
             search_data = search_response.json()
             if not search_data.get("results"):
-                simplify_response = await call_claude(
+                simplify_response = await call_model(
                     messages=[{"role": "user", "content": f'Give the simplified English name (1-4 words) of this recipe for a search. Reply ONLY with the name: "{req.title}"'}],
                     max_tokens=20, purpose="recipe_simplify_query", client_ref=x_device_token, timeout=10.0,
                 )
@@ -1536,7 +1508,7 @@ Retourne UNIQUEMENT ce JSON valide sans texte avant ni après :
   "ingredients_fr": [{{"ingredient": "ingrédient traduit", "measure": "mesure traduite"}}],
   "steps_fr": ["étape 1 traduite", "étape 2 traduite"]
 }}"""
-        claude_response = await call_claude(
+        claude_response = await call_model(
             messages=[{"role": "user", "content": translation_prompt}], max_tokens=2000,
             purpose="recipe_translate", client_ref=x_device_token,
         )
@@ -1644,7 +1616,7 @@ ARTICLES :
 {articles_summary}
 Sélectionne les 10 articles les plus pertinents. Retourne UNIQUEMENT ce JSON :
 {{"selected": [{{"index": 1, "why": "Explication courte"}}]}}"""
-        claude_response = await call_claude(
+        claude_response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=600,
             purpose="news_personalize", client_ref=x_device_token, timeout=20.0,
         )
@@ -1684,25 +1656,6 @@ async def get_flagship_news(req: NewsRequest, x_app_secret: str = Header(None)):
         return {"articles": []}
 
 # ── VECTORISATION ──
-async def embed_texts(texts: list) -> list:
-    if not texts: return []
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                MISTRAL_EMBED_URL,
-                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
-                json={"model": MISTRAL_EMBED_MODEL, "input": texts, "encoding_format": "float"},
-                timeout=30.0,
-            )
-            data = response.json()
-            if "data" not in data:
-                print(f"⚠️ Mistral Embed erreur: {data}")
-                return []
-            return [item["embedding"] for item in data["data"]]
-    except Exception as e:
-        print(f"❌ Erreur embed_texts: {str(e)}")
-        return []
-
 async def upsert_article(article: dict, embedding: list, category: str):
     if not embedding or not article.get("url"): return
     try:
@@ -2563,7 +2516,7 @@ Voici le modèle personnel de cet utilisateur, construit à partir de ses compor
 
 Rédige le portrait narratif."""
 
-    response = await call_claude(
+    response = await call_model(
         messages=[{"role": "user", "content": prompt}], max_tokens=1000,
         purpose="portrait_narrative", client_ref=x_device_token,
     )
@@ -2587,7 +2540,7 @@ async def generate_portrait_resume(req: PortraitRequest, x_app_secret: str = Hea
     Args:
         req: Body containing the list of eligible traits (same shape as /portrait).
         x_app_secret: Shared app secret, verified before any processing.
-        x_device_token: Opaque device identifier, forwarded to call_claude for logging/attribution.
+        x_device_token: Opaque device identifier, forwarded to call_model for logging/attribution.
 
     Returns:
         JSON with `success`, the generated `resume` text (3 sentences max), and `trait_count`.
@@ -2602,7 +2555,7 @@ async def generate_portrait_resume(req: PortraitRequest, x_app_secret: str = Hea
     Args (FR):
         req: Corps contenant la liste des traits éligibles (même forme que /portrait).
         x_app_secret: Secret d'application partagé, vérifié avant tout traitement.
-        x_device_token: Identifiant opaque de l'appareil, transmis à call_claude pour le suivi/l'attribution.
+        x_device_token: Identifiant opaque de l'appareil, transmis à call_model pour le suivi/l'attribution.
 
     Returns (FR):
         JSON avec `success`, le texte `resume` généré (3 phrases maximum), et `trait_count`.
@@ -2646,7 +2599,7 @@ Voici le modèle personnel de cet utilisateur, construit à partir de ses compor
 
 Rédige la capsule d'identité en 3 phrases maximum."""
 
-    response = await call_claude(
+    response = await call_model(
         messages=[{"role": "user", "content": prompt}], max_tokens=200,
         purpose="portrait_resume", client_ref=x_device_token,
     )
@@ -2747,7 +2700,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour, sans balises
 [{{"attribute": "...", "relevanceScore": 0.0, "rationale": "..."}}]"""
 
     try:
-        response = await call_claude(
+        response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=2000,
             purpose="bloc_context_select", client_ref=x_device_token, timeout=45.0,
         )
@@ -2883,7 +2836,7 @@ Rédige un MODE D'EMPLOI au modèle qui va répondre (300 mots maximum) — pas 
 Réponds uniquement avec le texte du bloc en Markdown, sans titre, sans balises de code autour."""
 
     try:
-        response = await call_claude(
+        response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=800,
             purpose="bloc_context_compose", client_ref=x_device_token, timeout=45.0,
         )
@@ -2980,7 +2933,7 @@ Réécris cette demande pour la rendre plus claire et mieux structurée. Règles
 Réponds UNIQUEMENT avec le texte reformulé, sans commentaire, sans guillemets autour."""
 
     try:
-        response = await call_claude(
+        response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=500,
             purpose="prompt_reformulate", client_ref=x_device_token,
         )
@@ -3165,7 +3118,7 @@ Réponds UNIQUEMENT avec un tableau JSON valide, sans texte autour :
 [{{"target_domain": "...", "target_class": "...", "content": {{...}}, "sensitivity": "...", "extraction_confidence": 0.0}}]"""
 
     try:
-        response = await call_claude(
+        response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=1000,
             purpose="capture_extract", client_ref=x_device_token, timeout=45.0,
         )
@@ -3242,7 +3195,7 @@ async def send_bloc_context_to_claude(
         raise HTTPException(status_code=400, detail="Bloc vide")
 
     try:
-        response = await call_claude(
+        response = await call_model(
             messages=[{"role": "user", "content": req.block}], max_tokens=1500,
             purpose="bloc_context_send", client_ref=x_device_token,
             timeout=60.0,  # généreux : une réponse structurée (tableaux, catégories) prend plus que 30s
@@ -3291,7 +3244,7 @@ Rédige une synthèse personnalisée de 2 paragraphes (100 à 150 mots) qui :
 
 Ne reproduis pas les insights mot pour mot. Synthétise, relie, donne du sens."""
 
-    response = await call_claude(
+    response = await call_model(
         messages=[{"role": "user", "content": prompt}], max_tokens=600,
         purpose="research_synthesis", client_ref=x_device_token,
     )
@@ -3376,7 +3329,7 @@ Rédige une présentation personnalisée de ces métiers en 3 à 4 paragraphes (
 - Ton : coach expérimenté qui parle à un pair, pas un conseiller Pôle Emploi
 - Langue : français, vouvoiement"""
 
-    response = await call_claude(
+    response = await call_model(
         messages=[{"role": "user", "content": prompt}], max_tokens=800,
         purpose="jobs_presentation", client_ref=x_device_token,
     )

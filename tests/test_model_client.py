@@ -1,9 +1,12 @@
 """
-call_claude est le SEUL point d'appel à l'API Anthropic dans tout le
-fichier — tous les endpoints LLM (portrait, bloc-context, capture/extract,
-research, jobs...) passent par lui. On teste ici la construction du
-payload et la tolérance aux réponses incomplètes, sans dépendre d'un
-vrai réseau (respx intercepte httpx).
+call_model est la SEULE porte vers un fournisseur de modèle — tous les
+endpoints (portrait, bloc-context, capture/extract, research, jobs...)
+passent par elle. On teste ici la construction de la charge utile, le
+routage par prestataire et la tolérance aux réponses incomplètes, sans
+dépendre d'un vrai réseau (respx intercepte httpx).
+
+Renommé de test_call_claude.py au lot A1 : la fonction ne s'adresse plus à
+un seul fournisseur.
 """
 import json
 
@@ -12,6 +15,7 @@ import pytest
 import respx
 
 import main
+import model_client
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,7 +31,7 @@ async def test_sends_expected_payload_shape():
         })
     )
 
-    response = await main.call_claude(
+    response = await main.call_model(
         messages=[{"role": "user", "content": "salut"}],
         max_tokens=42,
         purpose="test_purpose",
@@ -46,7 +50,7 @@ async def test_includes_system_prompt_when_provided():
     route = respx.post(ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json={"content": [{"text": "ok"}]})
     )
-    await main.call_claude(
+    await main.call_model(
         messages=[{"role": "user", "content": "x"}],
         max_tokens=10,
         purpose="test_purpose",
@@ -61,7 +65,7 @@ async def test_sends_required_headers():
     route = respx.post(ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json={"content": [{"text": "ok"}]})
     )
-    await main.call_claude(
+    await main.call_model(
         messages=[{"role": "user", "content": "x"}], max_tokens=10, purpose="p",
     )
     sent_headers = route.calls[0].request.headers
@@ -76,7 +80,7 @@ async def test_tolerates_response_without_usage_field():
     respx.post(ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json={"content": [{"text": "ok"}]})
     )
-    response = await main.call_claude(
+    response = await main.call_model(
         messages=[{"role": "user", "content": "x"}], max_tokens=10, purpose="p",
     )
     assert response.status_code == 200
@@ -89,7 +93,7 @@ async def test_propagates_non_200_status_without_raising():
     respx.post(ANTHROPIC_URL).mock(
         return_value=httpx.Response(529, json={"error": "overloaded"})
     )
-    response = await main.call_claude(
+    response = await main.call_model(
         messages=[{"role": "user", "content": "x"}], max_tokens=10, purpose="p",
     )
     assert response.status_code == 529

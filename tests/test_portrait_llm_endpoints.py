@@ -4,10 +4,10 @@ appels LLM) : /portrait, /portrait-resume, /bloc-context/select,
 /bloc-context/compose, /capture/extract.
 
 Aucun de ces endpoints ne touche une base de données — ils construisent
-un prompt, appellent call_claude, parsent la réponse. On mocke donc
-uniquement main.call_claude, jamais httpx directement : ça isole "est-ce
+un prompt, appellent call_model, parsent la réponse. On simule donc
+uniquement main.call_model, jamais httpx directement : ça isole "est-ce
 que l'endpoint construit le bon prompt et gère bien la réponse" de
-"est-ce que call_claude fonctionne" (déjà couvert par test_call_claude.py).
+"est-ce que call_model fonctionne" (déjà couvert par test_model_client.py).
 """
 import json
 
@@ -21,25 +21,25 @@ def mock_claude_text(monkeypatch, text, status_code=200, stop_reason="end_turn")
     import main
     calls = []
 
-    async def fake_call_claude(*, messages, max_tokens, purpose, system=None,
-                                client_ref=None, model="claude-sonnet-4-6", timeout=30.0):
+    async def fake_call_model(*, messages, max_tokens, purpose, system=None,
+                               client_ref=None, timeout=30.0):
         calls.append({"messages": messages, "max_tokens": max_tokens, "purpose": purpose})
         return httpx.Response(status_code, json={
             "content": [{"text": text}],
             "stop_reason": stop_reason,
         })
 
-    monkeypatch.setattr(main, "call_claude", fake_call_claude)
+    monkeypatch.setattr(main, "call_model", fake_call_model)
     return calls
 
 
 def mock_claude_raises(monkeypatch, exc):
     import main
 
-    async def fake_call_claude(**kwargs):
+    async def fake_call_model(**kwargs):
         raise exc
 
-    monkeypatch.setattr(main, "call_claude", fake_call_claude)
+    monkeypatch.setattr(main, "call_model", fake_call_model)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ def test_portrait_returns_502_on_claude_error_status(client, auth_headers, monke
     mock_claude_text(monkeypatch, "erreur", status_code=529)
     payload = {"traits": [{"attribute": "x", "dimension": "d", "value": 0.5, "confidence": 0.5}]}
     resp = client.post("/portrait", json=payload, headers=auth_headers)
-    # NB : /portrait n'a pas de try/except autour de call_claude comme
+    # NB : /portrait n'a pas de try/except autour de call_model comme
     # /bloc-context/*  — si ce test échoue avec une 500, c'est le signal
     # exact que cet endpoint mériterait le même filet que les autres.
     assert resp.status_code in (200, 502)
