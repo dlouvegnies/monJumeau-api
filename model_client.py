@@ -53,6 +53,36 @@ MODEL_NAME_ANTHROPIC = os.environ.get("MODEL_NAME_ANTHROPIC", "claude-sonnet-4-6
 MODEL_NAME_MISTRAL = os.environ.get("MODEL_NAME_MISTRAL", "mistral-large-latest")
 MODEL_NAME_EMBED = os.environ.get("MODEL_NAME_EMBED", "mistral-embed")
 
+# ── Délais ────────────────────────────────────────────────────────────────
+# Une génération de 2000 jetons dépasse régulièrement 30 secondes : c'était
+# le défaut hérité, et il a coupé une comparaison en production le 17/09
+# (httpx.ReadTimeout). Le délai est désormais EXPLICITE, par prestataire, et
+# généreux — un appel lent coûte une attente, un appel coupé coûte une
+# comparaison perdue et deux téléphones qui sondent dans le vide.
+MODEL_TIMEOUT_SECONDS = float(os.environ.get("MODEL_TIMEOUT_SECONDS", "120"))
+MODEL_TIMEOUT_SECONDS_ANTHROPIC = float(
+    os.environ.get("MODEL_TIMEOUT_SECONDS_ANTHROPIC", MODEL_TIMEOUT_SECONDS))
+MODEL_TIMEOUT_SECONDS_MISTRAL = float(
+    os.environ.get("MODEL_TIMEOUT_SECONDS_MISTRAL", MODEL_TIMEOUT_SECONDS))
+# Vectoriser est rapide : inutile d'attendre deux minutes pour un échec.
+MODEL_TIMEOUT_SECONDS_EMBED = float(os.environ.get("MODEL_TIMEOUT_SECONDS_EMBED", "30"))
+
+
+def timeout_for(provider: str) -> float:
+    """How long to wait for one provider, from configuration.
+
+    @param provider: 'anthropic' or 'mistral'.
+    @returns: Seconds.
+
+    ---
+
+    Combien de temps attendre un prestataire, depuis la configuration.
+
+    @param provider: 'anthropic' ou 'mistral'.
+    @returns: Secondes.
+    """
+    return MODEL_TIMEOUT_SECONDS_MISTRAL if provider == MISTRAL else MODEL_TIMEOUT_SECONDS_ANTHROPIC
+
 # $ par million de jetons (entrée, sortie).
 PRICING = {
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
@@ -236,7 +266,7 @@ async def _appeler_mistral(*, messages, max_tokens, system, model, timeout):
 
 
 async def call_model(*, purpose: str, messages, max_tokens, system: str = None,
-                     client_ref=None, timeout: float = 30.0):
+                     client_ref=None, timeout: float = None):
     """Calls a language model. The single door.
 
     @param purpose: What the call is for, e.g. "capture_extract". Identifies
@@ -245,7 +275,7 @@ async def call_model(*, purpose: str, messages, max_tokens, system: str = None,
     @param max_tokens: Ceiling on the answer.
     @param system: System instruction, optional.
     @param client_ref: Anonymous caller reference, for the cost log.
-    @param timeout: Seconds.
+    @param timeout: Seconds; None means the provider's configured delay.
     @returns: A response exposing `.status_code` and `.json()`, always in
         Anthropic's shape.
 
@@ -260,16 +290,17 @@ async def call_model(*, purpose: str, messages, max_tokens, system: str = None,
     @param max_tokens: Plafond de la réponse.
     @param system: Consigne système, facultative.
     @param client_ref: Référence anonyme de l'appelant, pour le journal des coûts.
-    @param timeout: Secondes.
+    @param timeout: Secondes ; None signifie le délai configuré du prestataire.
     @returns: Une réponse exposant `.status_code` et `.json()`, toujours dans
         la forme d'Anthropic.
     """
     prestataire = provider_for(purpose)
     modele = model_for(prestataire)
+    delai = timeout if timeout is not None else timeout_for(prestataire)
     adaptateur = _appeler_mistral if prestataire == MISTRAL else _appeler_anthropic
     reponse = await adaptateur(
         messages=messages, max_tokens=max_tokens, system=system,
-        model=modele, timeout=timeout,
+        model=modele, timeout=delai,
     )
     if _usage_logger is not None:
         try:
@@ -306,7 +337,7 @@ async def embed_texts(texts: list) -> list:
                     "Content-Type": "application/json",
                 },
                 json={"model": MODEL_NAME_EMBED, "input": texts, "encoding_format": "float"},
-                timeout=30.0,
+                timeout=MODEL_TIMEOUT_SECONDS_EMBED,
             )
             corps = reponse.json()
             if "data" not in corps:

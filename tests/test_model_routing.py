@@ -147,3 +147,57 @@ def test_le_controle_ne_passe_pas_a_vide():
     assert (RACINE / "model_client.py").exists()
     contenu = (RACINE / "model_client.py").read_text(encoding="utf8")
     assert "api.anthropic.com" in contenu and "api.mistral.ai" in contenu
+
+
+# ── Délais (défaut de production du 17/09) ───────────────────────────────
+
+def test_le_delai_est_genereux_par_defaut():
+    """Une génération de 2000 jetons dépasse régulièrement 30 secondes.
+    C'était le défaut hérité, et il a coupé une comparaison en production."""
+    assert model_client.MODEL_TIMEOUT_SECONDS >= 120
+    assert model_client.timeout_for("anthropic") >= 120
+    assert model_client.timeout_for("mistral") >= 120
+
+
+def test_le_delai_des_vecteurs_reste_court():
+    """Vectoriser est rapide : inutile d'attendre deux minutes un échec."""
+    assert 0 < model_client.MODEL_TIMEOUT_SECONDS_EMBED <= 60
+
+
+def test_aucun_client_http_sans_delai_explicite():
+    """LE contrôle du correctif : chaque envoi vers un fournisseur doit
+    nommer son délai. Un `client.post` sans `timeout=` hérite du défaut
+    d'httpx — et c'est ainsi qu'une comparaison meurt en silence.
+    """
+    source = (RACINE / "model_client.py").read_text(encoding="utf8")
+    envois = []
+    for bloc in source.split("client.post(")[1:]:
+        entete = bloc[:bloc.index(")\n") if ")\n" in bloc else len(bloc)]
+        envois.append(entete)
+    assert len(envois) >= 3, f"balayage à vide : {len(envois)} envoi(s)"
+    sans_delai = [e[:60] for e in envois if "timeout=" not in e]
+    assert sans_delai == [], sans_delai
+
+
+@respx.mock
+async def test_le_delai_configure_est_bien_celui_utilise(monkeypatch):
+    """Ce qui est configuré est ce qui part : pas un défaut caché."""
+    monkeypatch.setattr(model_client, "MODEL_TIMEOUT_SECONDS_ANTHROPIC", 137.0)
+    respx.post(model_client.ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={"content": [{"text": "ok"}]}))
+    await model_client.call_model(
+        purpose="essai_delai", messages=[{"role": "user", "content": "x"}], max_tokens=5)
+    assert respx.calls.last.request.extensions.get("timeout", {}).get("read") == 137.0
+
+
+@respx.mock
+async def test_un_delai_passe_a_la_main_a_la_priorite(monkeypatch):
+    """L'appelant peut réduire le délai — c'est ce dont se sert le budget de
+    la relance, pour ne pas doubler l'attente."""
+    monkeypatch.setattr(model_client, "MODEL_TIMEOUT_SECONDS_ANTHROPIC", 120.0)
+    respx.post(model_client.ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={"content": [{"text": "ok"}]}))
+    await model_client.call_model(
+        purpose="essai_delai2", messages=[{"role": "user", "content": "x"}],
+        max_tokens=5, timeout=12.0)
+    assert respx.calls.last.request.extensions.get("timeout", {}).get("read") == 12.0

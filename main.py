@@ -12,6 +12,7 @@ import re
 import feedparser
 from email.utils import parsedate_to_datetime
 import asyncio
+import time
 import html
 from urllib.parse import urlparse
 from fastapi.responses import HTMLResponse
@@ -20,7 +21,7 @@ from rc_webapp import RC_WEBAPP_HTML
 # Tout appel à un fournisseur passe par model_client. Les URL, les clés et
 # le choix du prestataire n'existent que là-bas ; un test du dépôt échoue si
 # l'un d'eux réapparaît ici.
-from model_client import call_model, embed_texts, estimate_cost_usd, set_usage_logger
+from model_client import call_model, embed_texts, estimate_cost_usd, set_usage_logger, timeout_for, provider_for
 
 app = FastAPI()
 app.add_middleware(
@@ -236,6 +237,10 @@ REJECTED_EXPIRY_DAYS = 7
 # Filet : une comparaison dont le résultat n'a jamais été pris par les deux
 # téléphones ne survit pas à ce délai (décision L).
 COMPARISON_KEEP_DAYS = 30
+# Budget total d'une analyse de comparaison, relance comprise. Une relance
+# sur marqueurs ne doit pas doubler l'attente sans limite : passé ce budget,
+# on garde ce qu'on a plutôt que de faire patienter deux téléphones.
+COMPARE_BUDGET_SECONDS = float(os.environ.get("COMPARE_BUDGET_SECONDS", "300"))
 PENDING_EXPIRY_DAYS  = 14
 pays_autorises       = ['fra', 'cor', 'bre']
 spotify_token        = None
@@ -1132,7 +1137,8 @@ async def respond_comparison(req: CompareRespondModel, x_app_secret: str = Heade
     updated = await sb_get_one('comparisons', {"id": f"eq.{req.comparison_id}"})
     if updated and updated.get('from_accepted') and updated.get('to_accepted'):
         await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"}, {"status": "analyzing"})
-        asyncio.create_task(analyze_comparison(req.comparison_id))
+        tache = asyncio.create_task(analyze_comparison(req.comparison_id))
+        tache.add_done_callback(_recuperer_exception)
         return {"success": True, "status": "analyzing"}
     return {"success": True, "status": "waiting"}
 
@@ -1280,9 +1286,96 @@ def fautes_de_marqueurs(result_json: str) -> list:
     return fautes
 
 
+async def _clore_comparaison_en_echec(comparison_id: str, comparison: dict, cause: str):
+    """Closes a comparison that could not be analysed: records the failure,
+    drops both vectors in the same write, and tells both phones.
+
+    Nothing may die in silence here. A background task that raises leaves the
+    row in `analyzing` for ever, with two psychometric vectors in it, and two
+    phones polling a status that will never change — which is exactly what
+    happened in production on 17/09.
+
+    @param comparison_id: The comparison.
+    @param comparison: Its row, for the two codes.
+    @param cause: What went wrong, for the log.
+    @returns: None.
+
+    ---
+
+    Referme une comparaison qui n'a pas pu être analysée : enregistre
+    l'échec, efface les deux vecteurs dans la même écriture, et prévient les
+    deux téléphones.
+
+    Rien ne doit mourir en silence ici. Une tâche de fond qui lève laisse la
+    ligne en `analyzing` pour toujours, avec deux vecteurs psychométriques
+    dedans, et deux téléphones qui sondent un statut qui ne changera jamais —
+    c'est exactement ce qui est arrivé en production le 17/09.
+
+    @param comparison_id: La comparaison.
+    @param comparison: Sa ligne, pour les deux codes.
+    @param cause: Ce qui a échoué, pour le journal.
+    @returns: None.
+    """
+    print(f"❌ compare_generate {comparison_id} : {cause}")
+    try:
+        await sb_patch('comparisons', {"id": f"eq.{comparison_id}"},
+                       {"status": "failed", "from_vector": None, "to_vector": None})
+    except Exception as e:
+        print(f"❌ compare_generate {comparison_id} : statut non enregistré ({e})")
+    for champ in ('from_code', 'to_code'):
+        code = (comparison or {}).get(champ)
+        if not code:
+            continue
+        try:
+            token_row = await sb_get_one('push_tokens', {"my_code": f"eq.{code}"})
+            if token_row:
+                await send_push_notification(
+                    push_token=token_row['push_token'],
+                    title='Comparaison interrompue',
+                    body="La comparaison n'a pas pu être réalisée, vous pouvez la relancer.",
+                    data={'screen': 'Social', 'comparison_id': comparison_id},
+                )
+        except Exception as e:
+            print(f"⚠️ compare_generate {comparison_id} : push {champ} échoué ({e})")
+
+
+def _recuperer_exception(task):
+    """Reads a finished background task's exception, so Python stops warning
+    "Task exception was never retrieved" — and so the cause reaches the log.
+
+    @param task: The finished task.
+    @returns: None.
+
+    ---
+
+    Lit l'exception d'une tâche de fond terminée, pour que Python cesse
+    d'avertir « Task exception was never retrieved » — et pour que la cause
+    arrive dans le journal.
+
+    @param task: La tâche terminée.
+    @returns: None.
+    """
+    try:
+        exc = task.exception()
+    except Exception:
+        return
+    if exc is not None:
+        print(f"❌ tâche de fond interrompue : {type(exc).__name__} : {exc}")
+
+
 async def analyze_comparison(comparison_id: str):
     comparison = await sb_get_one('comparisons', {"id": f"eq.{comparison_id}", "select": "*"})
-    if not comparison: return
+    if not comparison:
+        return
+    try:
+        await _analyser_comparaison(comparison_id, comparison)
+    except Exception as e:
+        # Le filet : délai dépassé, réponse illisible, base indisponible —
+        # quelle que soit la cause, la comparaison se referme proprement.
+        await _clore_comparaison_en_echec(comparison_id, comparison, f"{type(e).__name__} : {e}")
+
+
+async def _analyser_comparaison(comparison_id: str, comparison: dict):
     from_vector = json.loads(comparison['from_vector'])
     to_vector   = json.loads(comparison['to_vector'])
     prompt = construire_prompt_comparaison(from_vector, to_vector)
@@ -1293,10 +1386,19 @@ async def analyze_comparison(comparison_id: str):
     # analyse qui dit « l'un » au lieu de « {A} » est illisible une fois
     # affichée — l'app ne peut pas deviner de qui il s'agit (C-37).
     result = None
+    debut = time.monotonic()
+    delai_appel = timeout_for(provider_for("compare_generate"))
     for essai in (1, 2):
+        reste = COMPARE_BUDGET_SECONDS - (time.monotonic() - debut)
+        if essai == 2 and reste < 20:
+            # La relance ne doit pas doubler l'attente sans limite : deux
+            # téléphones patientent au bout.
+            print(f"⚠️ compare_generate {comparison_id} : budget épuisé, relance abandonnée")
+            break
         response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=2000,
             purpose="compare_generate", client_ref=comparison.get('from_code'),
+            timeout=min(delai_appel, max(reste, 1)),
         )
         data = response.json()
         result_text = (data.get('content') or [{}])[0].get('text', '')
@@ -1329,10 +1431,10 @@ async def analyze_comparison(comparison_id: str):
                     data={'screen': 'CompareResult', 'comparison_id': comparison_id}
                 )
     else:
-        # Échec : aucune analyse exploitable. Les vecteurs partent quand même
-        # — ils ne serviront plus, et les garder serait les garder pour rien.
-        await sb_patch('comparisons', {"id": f"eq.{comparison_id}"},
-                       {"status": "failed", "from_vector": None, "to_vector": None})
+        # Aucune analyse exploitable : même sortie que n'importe quel autre
+        # échec — statut, vecteurs effacés, et les deux téléphones prévenus.
+        await _clore_comparaison_en_echec(comparison_id, comparison,
+                                          "aucune analyse exploitable après relance")
 
 
 @app.post("/compare/ack")

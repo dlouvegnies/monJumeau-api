@@ -211,3 +211,123 @@ async def test_une_comparaison_recente_survit_au_nettoyage(base, monkeypatch):
     with pytest.raises(RuntimeError):
         await main.cleanup_old_requests()
     assert [l["id"] for l in base.lignes] == ["recente"]
+
+
+# ── Le filet : rien ne meurt en silence (défaut de production du 17/09) ──
+
+@pytest.mark.asyncio
+async def test_un_delai_depasse_referme_la_comparaison(base, monkeypatch):
+    """Le défaut exact : httpx.ReadTimeout dans l'adaptateur. La ligne
+    restait en `analyzing`, vecteurs intacts, et deux téléphones sondaient
+    un statut qui ne changerait jamais."""
+    import httpx
+    base.lignes = [comparaison()]
+    base.lignes[0]["status"] = "analyzing"
+    pushs = []
+
+    async def modele_qui_expire(**kwargs):
+        raise httpx.ReadTimeout("délai dépassé")
+
+    async def faux_push(**kwargs):
+        pushs.append(kwargs)
+
+    async def faux_token(table, params):
+        if table == "push_tokens":
+            return {"push_token": "jeton-" + params["my_code"].split(".")[-1]}
+        return await base.get_one(table, params)
+
+    monkeypatch.setattr(main, "call_model", modele_qui_expire)
+    monkeypatch.setattr(main, "send_push_notification", faux_push)
+    monkeypatch.setattr(main, "sb_get_one", faux_token)
+
+    await main.analyze_comparison("c1")
+
+    ligne = base.lignes[0]
+    assert ligne["status"] == "failed"
+    assert ligne["from_vector"] is None and ligne["to_vector"] is None
+    assert len(pushs) == 2, pushs
+    assert all("relancer" in p["body"].lower() for p in pushs)
+    assert all("vous" in p["body"].lower() for p in pushs)
+
+
+@pytest.mark.asyncio
+async def test_une_base_indisponible_ne_fait_pas_mourir_la_tache(base, monkeypatch):
+    """Même une erreur de base au milieu se referme : le filet attrape tout."""
+    base.lignes = [comparaison()]
+
+    async def modele_qui_casse(**kwargs):
+        raise RuntimeError("supabase injoignable")
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele_qui_casse)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    await main.analyze_comparison("c1")
+    assert base.lignes[0]["status"] == "failed"
+    assert base.lignes[0]["from_vector"] is None
+
+
+@pytest.mark.asyncio
+async def test_la_relance_ne_double_pas_l_attente_sans_limite(base, monkeypatch):
+    """Quand le budget est épuisé, on renonce à la relance plutôt que de
+    faire patienter deux téléphones une seconde fois."""
+    base.lignes = [comparaison()]
+    appels = []
+    fautif = json.dumps({"message_poetique": "L'un avance, l'autre regarde."}, ensure_ascii=False)
+
+    async def modele_fautif(**kwargs):
+        appels.append(kwargs.get("timeout"))
+        class R:
+            status_code = 200
+            def json(self): return {"content": [{"text": fautif}]}
+        return R()
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele_fautif)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    monkeypatch.setattr(main, "COMPARE_BUDGET_SECONDS", 0.0)
+    await main.analyze_comparison("c1")
+    assert len(appels) == 1, f"la relance aurait dû être abandonnée : {appels}"
+
+
+@pytest.mark.asyncio
+async def test_la_relance_a_lieu_quand_le_budget_le_permet(base, monkeypatch):
+    base.lignes = [comparaison()]
+    appels = []
+    fautif = json.dumps({"message_poetique": "L'un avance, l'autre regarde."}, ensure_ascii=False)
+
+    async def modele_fautif(**kwargs):
+        appels.append(kwargs.get("timeout"))
+        class R:
+            status_code = 200
+            def json(self): return {"content": [{"text": fautif}]}
+        return R()
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "call_model", modele_fautif)
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+    await main.analyze_comparison("c1")
+    assert len(appels) == 2
+    assert all(t is not None and t > 0 for t in appels), appels
+
+
+def test_la_tache_de_fond_recupere_son_exception():
+    """Sans ce rappel, Python avertit « Task exception was never retrieved »
+    et la cause n'arrive jamais dans le journal."""
+    import asyncio as aio
+
+    class FausseTache:
+        def exception(self):
+            return RuntimeError("boum")
+
+    main._recuperer_exception(FausseTache())  # ne doit pas lever
+
+    source = (__import__("pathlib").Path(main.__file__)).read_text(encoding="utf8")
+    i_creation = source.index("asyncio.create_task(analyze_comparison(")
+    i_rappel = source.index("add_done_callback(_recuperer_exception)")
+    assert i_rappel > i_creation and i_rappel - i_creation < 200
