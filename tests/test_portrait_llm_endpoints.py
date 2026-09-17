@@ -190,7 +190,12 @@ def test_capture_extract_returns_empty_on_blank_text_without_calling_claude(clie
     calls = mock_claude_text(monkeypatch, "ne devrait jamais être appelé")
     resp = client.post("/capture/extract", json={"text": "   "}, headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json() == {"success": True, "candidates": []}
+    # L'endpoint rend aussi `method` et `status` depuis le lot 2b de la V3 :
+    # on vérifie ce qui compte ici (aucun candidat, aucune erreur visible),
+    # sans figer la forme entière de la réponse.
+    corps = resp.json()
+    assert corps["success"] is True and corps["candidates"] == []
+    assert corps["status"] == "empty_input"
     assert calls == []  # Claude ne doit même pas être sollicité pour un texte vide
 
 
@@ -200,21 +205,36 @@ def test_capture_extract_fails_silently_on_claude_network_error(client, auth_hea
     # RFC-0004bis CA-11 : jamais une erreur visible pour l'utilisateur ici —
     # cette extraction tourne après coup, en arrière-plan.
     assert resp.status_code == 200
-    assert resp.json() == {"success": True, "candidates": []}
+    # L'endpoint rend aussi `method` et `status` depuis le lot 2b de la V3 :
+    # on vérifie ce qui compte ici (aucun candidat, aucune erreur visible),
+    # sans figer la forme entière de la réponse.
+    corps = resp.json()
+    assert corps["success"] is True and corps["candidates"] == []
+    assert corps["status"] == "failed"
 
 
 def test_capture_extract_fails_silently_on_claude_error_status(client, auth_headers, monkeypatch):
     mock_claude_text(monkeypatch, "peu importe", status_code=529)
     resp = client.post("/capture/extract", json={"text": "j'ai déménagé à Rennes"}, headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json() == {"success": True, "candidates": []}
+    # L'endpoint rend aussi `method` et `status` depuis le lot 2b de la V3 :
+    # on vérifie ce qui compte ici (aucun candidat, aucune erreur visible),
+    # sans figer la forme entière de la réponse.
+    corps = resp.json()
+    assert corps["success"] is True and corps["candidates"] == []
+    assert corps["status"] == "failed"
 
 
 def test_capture_extract_fails_silently_on_unparseable_response(client, auth_headers, monkeypatch):
     mock_claude_text(monkeypatch, "je ne comprends pas la demande")
     resp = client.post("/capture/extract", json={"text": "j'ai déménagé à Rennes"}, headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.json() == {"success": True, "candidates": []}
+    # L'endpoint rend aussi `method` et `status` depuis le lot 2b de la V3 :
+    # on vérifie ce qui compte ici (aucun candidat, aucune erreur visible),
+    # sans figer la forme entière de la réponse.
+    corps = resp.json()
+    assert corps["success"] is True and corps["candidates"] == []
+    assert corps["status"] == "failed"
 
 
 def test_capture_extract_returns_parsed_candidates(client, auth_headers, monkeypatch):
