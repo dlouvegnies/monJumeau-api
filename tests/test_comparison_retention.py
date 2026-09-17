@@ -464,3 +464,36 @@ async def test_une_reponse_coupee_mais_au_JSON_valide_est_refusee_aussi(base, mo
     await main.analyze_comparison("c1")
     assert base.lignes[0]["status"] == "failed", "une réponse coupée ne doit jamais devenir completed"
     assert base.lignes[0].get("result") in (None, "")
+
+
+@pytest.mark.asyncio
+async def test_le_compteur_suit_les_analyses_conservees_avec_fautes(base, monkeypatch):
+    """Décision du 17/09 : on laisse passer un texte fautif après deux essais.
+    Le compteur dit si ce choix reste raisonnable — au-delà d'environ 10 %,
+    c'est le prompt qu'il faut revoir."""
+    main.COMPTEUR_COMPARAISONS["total"] = 0
+    main.COMPTEUR_COMPARAISONS["conservees_avec_fautes"] = 0
+    fautif = json.dumps({"score_global": 70,
+                         "message_poetique": "L'un avance, l'autre regarde."}, ensure_ascii=False)
+    propre = json.dumps({"score_global": 80, "message_poetique": "{A} et {B}."}, ensure_ascii=False)
+
+    async def sans_push(**kwargs):
+        return None
+
+    monkeypatch.setattr(main, "send_push_notification", sans_push)
+
+    async def modele_fautif(**kwargs):
+        return _reponse(fautif)
+
+    monkeypatch.setattr(main, "call_model", modele_fautif)
+    base.lignes = [comparaison()]
+    await main.analyze_comparison("c1")
+    assert main.COMPTEUR_COMPARAISONS == {"total": 1, "conservees_avec_fautes": 1}
+
+    async def modele_propre(**kwargs):
+        return _reponse(propre)
+
+    monkeypatch.setattr(main, "call_model", modele_propre)
+    base.lignes = [comparaison()]
+    await main.analyze_comparison("c1")
+    assert main.COMPTEUR_COMPARAISONS == {"total": 2, "conservees_avec_fautes": 1}

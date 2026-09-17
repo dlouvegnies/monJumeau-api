@@ -242,6 +242,15 @@ COMPARISON_KEEP_DAYS = 30
 # sur marqueurs ne doit pas doubler l'attente sans limite : passé ce budget,
 # on garde ce qu'on a plutôt que de faire patienter deux téléphones.
 COMPARE_BUDGET_SECONDS = float(os.environ.get("COMPARE_BUDGET_SECONDS", "300"))
+
+# Combien d'analyses sont conservées malgré une rédaction fautive (« l'un »,
+# « l'autre »), après deux essais. Décision du 17/09 : on laisse passer — un
+# texte imparfait vaut mieux qu'un écran vide, et la substitution {A}/{B} ne
+# corrige pas cette tournure. Ce compteur dit si ce choix reste raisonnable.
+# En mémoire : il repart à zéro à chaque redéploiement. C'est un indicateur,
+# pas une comptabilité — si le taux dépasse ~10 %, c'est le prompt qu'il faut
+# revoir, pas le filet.
+COMPTEUR_COMPARAISONS = {"total": 0, "conservees_avec_fautes": 0}
 PENDING_EXPIRY_DAYS  = 14
 pays_autorises       = ['fra', 'cor', 'bre']
 spotify_token        = None
@@ -1286,8 +1295,19 @@ def fautes_de_marqueurs(result_json: str) -> list:
     def examiner(chemin: str, valeur):
         if isinstance(valeur, str):
             for motif in MOTIFS_INTERDITS:
-                if motif.search(valeur):
-                    fautes.append(f"{chemin} : « {valeur[:60]} »")
+                trouve = motif.search(valeur)
+                if trouve:
+                    # Citer le FRAGMENT fautif, pas le début du champ : un
+                    # extrait qui ne montre pas ce qu'on reproche envoie
+                    # chercher au mauvais endroit (17/09).
+                    debut = max(0, trouve.start() - 20)
+                    fin = min(len(valeur), trouve.end() + 20)
+                    extrait = valeur[debut:fin]
+                    if debut > 0:
+                        extrait = "…" + extrait
+                    if fin < len(valeur):
+                        extrait = extrait + "…"
+                    fautes.append(f"{chemin} : « {extrait} » (motif : {trouve.group(0)!r})")
                     return
         elif isinstance(valeur, list):
             for i, element in enumerate(valeur):
@@ -1459,10 +1479,17 @@ async def _analyser_comparaison(comparison_id: str, comparison: dict):
             # est imparfaite. L'app affichera « l'un » tel quel — la
             # substitution {A}/{B} ne corrige pas cette tournure (lot A5).
             result = json_match.group(0)
+            COMPTEUR_COMPARAISONS["conservees_avec_fautes"] += 1
     # Décision L : les vecteurs ne vivent que le temps de l'analyse. On les
     # met à null dans la MÊME écriture que le statut — pas dans un appel
     # d'après, qui pourrait ne jamais arriver.
     if result:
+        COMPTEUR_COMPARAISONS["total"] += 1
+        avec_fautes = COMPTEUR_COMPARAISONS["conservees_avec_fautes"]
+        total = COMPTEUR_COMPARAISONS["total"]
+        print(f"ℹ️ compare_generate : {avec_fautes}/{total} analyses conservées "
+              f"malgré une rédaction fautive ({100 * avec_fautes / total:.0f} %) "
+              f"— au-delà d'environ 10 %, revoir le prompt")
         await sb_patch('comparisons', {"id": f"eq.{comparison_id}"},
                        {"status": "completed", "result": result,
                         "from_vector": None, "to_vector": None})

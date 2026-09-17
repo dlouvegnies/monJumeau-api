@@ -133,3 +133,26 @@ def test_le_prompt_demande_de_rester_bref():
 
 def test_la_place_de_l_analyse_vient_de_la_configuration():
     assert main.MODEL_MAX_TOKENS_COMPARE >= 4000
+
+
+def test_le_journal_cite_le_fragment_fautif_pas_le_debut_du_champ():
+    """Un extrait qui ne montre pas ce qu'on reproche envoie chercher au
+    mauvais endroit : c'est ce qui a fait croire à un faux positif sur
+    « l'autonomie » le 17/09."""
+    long = ("{A} apprécie beaucoup la structure et la régularité du quotidien, "
+            "tandis que l'autre préfère improviser au fil des envies.")
+    fautes = main.fautes_de_marqueurs(json.dumps({"message_poetique": long}, ensure_ascii=False))
+    assert len(fautes) == 1
+    faute = fautes[0]
+    assert "l'autre" in faute
+    # Le début du champ ne doit PAS suffire à remplir l'extrait.
+    assert "apprécie beaucoup la structure" not in faute
+    # Et le motif trouvé est nommé, pour lever tout doute.
+    assert "motif :" in faute
+
+
+def test_le_fragment_cite_tient_dans_une_ligne():
+    long = "x" * 300 + " l'un " + "y" * 300
+    fautes = main.fautes_de_marqueurs(json.dumps({"message_poetique": long}, ensure_ascii=False))
+    assert len(fautes) == 1
+    assert len(fautes[0]) < 120, fautes[0]
