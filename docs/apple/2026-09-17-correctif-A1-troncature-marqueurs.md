@@ -2,9 +2,19 @@
 
 | | |
 |---|---|
-| API | `ec12191` → **`2be5967`**, **85 tests verts** |
+| API | `ec12191` → **`2be5967`** puis l'ajout du 17/09, **88 tests verts** |
 | App | inchangée |
 | État | Rien n'est poussé ni déployé. |
+
+---
+
+## 0. Suites données (17/09, après relecture de Denis)
+
+| Point | Décision |
+|---|---|
+| Faux positif sur « l'autonomie » | **Écarté** : il venait d'un extrait de log tronqué. Rien à corriger dans le motif. Mais le journal, lui, citait le **début du champ** au lieu du fragment fautif — c'est ce qui envoyait chercher au mauvais endroit. Il cite désormais **±20 caractères autour du motif**, points de suspension aux bords, motif nommé. |
+| Cas A5 | **On laisse passer.** Pas de masquage, pas de drapeau côté app. Un compteur suit conservées-avec-fautes / total et journalise le taux ; **au registre (note V3 §29.6 terdecies) : revoir le prompt si le taux dépasse ~10 %.** |
+| Cache | **`bash tests/run.sh`** est la commande officielle : elle vide tous les `__pycache__` et désactive le cache de pytest avant de jouer. Un bytecode périmé a masqué deux mutations ce jour-là. |
 
 ---
 
@@ -55,7 +65,7 @@ Pour du français, un jeton vaut typiquement 2,5 à 3,5 caractères. **2,82 tomb
 
 **Cinq mutations**, rouges puis restaurées : `json.loads` retiré · troncature ignorée · `/compare/status` qui replante · `l'une` invisible · plafond redescendu à 2000.
 
-*Au passage : un cache `__pycache__` périmé masquait deux de ces mutations — elles passaient au vert sur du bytecode d'une version antérieure. Les mutations sont désormais jouées cache vidé. C'est le genre de piège qui fait croire qu'un contrôle mord alors qu'il dort.*
+*Au passage : un cache `__pycache__` périmé masquait deux de ces mutations — elles passaient au vert sur du bytecode d'une version antérieure. D'où **`bash tests/run.sh`**, la commande officielle, qui vide le bytecode et désactive le cache de pytest avant de jouer. C'est le genre de piège qui fait croire qu'un contrôle mord alors qu'il dort.*
 
 ---
 
@@ -63,15 +73,11 @@ Pour du français, un jeton vaut typiquement 2,5 à 3,5 caractères. **2,82 tomb
 
 **Oui, un texte imparfait peut être affiché.** « Une relance puis on garde » veut dire exactement cela : si le second essai respecte le JSON mais écrit encore « l'un / l'autre », le résultat est **conservé et affiché tel quel**.
 
-**La substitution `{A}`/`{B}` ne corrigera pas « l'un / l'autre »** — il n'y a rien à substituer. Trois voies possibles au lot A5, à trancher :
+**La substitution `{A}`/`{B}` ne corrigera pas « l'un / l'autre »** — il n'y a rien à substituer.
 
-| Voie | En clair |
-|---|---|
-| Laisser passer | Le lecteur voit « l'un … l'autre » : imparfait, mais compréhensible dans le contexte. |
-| Masquer le champ fautif | On n'affiche pas la phrase qui ne dit pas de qui elle parle. |
-| Marquer le résultat | Le serveur ajoute un drapeau `redaction_imparfaite`, et l'app choisit. |
+**Tranché par Denis le 17/09 : on laisse passer.** Pas de masquage du champ, pas de drapeau côté app. Le lecteur voit « l'un … l'autre » : imparfait, mais compréhensible dans le contexte, et mieux qu'un écran vide.
 
-Je n'ai pas tranché : ce n'est pas le périmètre de ce correctif.
+Ce choix n'est raisonnable que si le cas reste rare — d'où le compteur, et le seuil au registre (§29.6 terdecies) : **si le taux dépasse ~10 %, c'est le prompt qu'il faut revoir**, pas ajouter un troisième essai ni un filet côté app.
 
 **Pour 0F90CED0 précisément** : je n'ai pas l'issue de l'essai 2, faute de log conservé. Ce que le code fait désormais est écrit ci-dessus ; ce qu'il a fait ce jour-là, seul ton journal Render le dit.
 
