@@ -311,8 +311,13 @@ def extract_json_array(raw: str, log_prefix: str = ""):
     raise ValueError("Aucun tableau JSON exploitable dans la réponse")
 
 # ── SQLITE — device_tokens uniquement ──
+# Lot A6 (18/09/2026) : le fichier portait le nom d'une fonctionnalité
+# retirée ce jour-là, et ne contenait plus que device_tokens ;
+# le nouveau fichier est créé vide par init_db(), et chaque lancement de
+# l'app ré-enregistre son jeton (/device/register) — le disque de Render
+# est de toute façon éphémère.
 def get_db():
-    db = sqlite3.connect('gifts.db')
+    db = sqlite3.connect('device_tokens.db')
     db.row_factory = sqlite3.Row
     return db
 
@@ -442,16 +447,6 @@ class MessageRequest(BaseModel):
     system: str
     messages: list
     max_tokens: int = 1000
-
-class SendGiftRequest(BaseModel):
-    from_code: str
-    to_code: str
-    trait: str
-    message: Optional[str] = None
-
-class RespondGiftRequest(BaseModel):
-    gift_id: str
-    accepted: bool
 
 class RegisterAliasRequest(BaseModel):
     my_code: str
@@ -1020,60 +1015,6 @@ async def recommend(req: MessageRequest, x_app_secret: str = Header(None), x_dev
         purpose="recommend", client_ref=x_device_token,
     )
     return response.json()
-
-# ── ENDPOINTS GIFTS — Supabase ──
-@app.post("/gift/send")
-async def send_gift(req: SendGiftRequest, x_app_secret: str = Header(None)):
-    verify_secret(x_app_secret)
-    gift_id    = str(uuid.uuid4())[:8].upper()
-    expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-    await sb_post('gifts', {
-        "id": gift_id, "from_code": req.from_code, "to_code": req.to_code,
-        "trait": req.trait, "message": req.message, "expires_at": expires_at,
-    })
-    token_row = await sb_get_one('push_tokens', {"my_code": f"eq.{req.to_code}"})
-    if token_row:
-        await send_push_notification(
-            push_token=token_row['push_token'],
-            title='🎁 Nouveau trait reçu !',
-            body="Quelqu'un pense que tu as une qualité particulière...",
-            data={'screen': 'ReceivedGifts', 'gift_id': gift_id}
-        )
-    return {"success": True, "gift_id": gift_id}
-
-@app.get("/gift/received/{my_code}")
-async def get_received(my_code: str, x_app_secret: str = Header(None)):
-    verify_secret(x_app_secret)
-    gifts = await sb_get('gifts', {
-        "to_code": f"eq.{my_code}", "status": "eq.pending",
-        "select": "*", "order": "created_at.desc",
-    })
-    return {"gifts": gifts}
-
-@app.get("/gift/sent/{my_code}")
-async def get_sent(my_code: str, x_app_secret: str = Header(None)):
-    verify_secret(x_app_secret)
-    gifts = await sb_get('gifts', {
-        "from_code": f"eq.{my_code}", "select": "*",
-        "order": "created_at.desc", "limit": "50",
-    })
-    return {"gifts": gifts}
-
-@app.post("/gift/respond")
-async def respond_gift(req: RespondGiftRequest, x_app_secret: str = Header(None)):
-    verify_secret(x_app_secret)
-    status = 'accepted' if req.accepted else 'rejected'
-    await sb_patch('gifts',
-        params={"id": f"eq.{req.gift_id}"},
-        body={"status": status, "responded_at": datetime.now(timezone.utc).isoformat()}
-    )
-    gift = await sb_get_one('gifts', {"id": f"eq.{req.gift_id}"})
-    return {"success": True, "gift": gift}
-
-@app.get("/gift/check-code/{code}")
-async def check_code(code: str):
-    gifts = await sb_get('gifts', {"or": f"(from_code.eq.{code},to_code.eq.{code})", "select": "id", "limit": "1"})
-    return {"exists": len(gifts) > 0}
 
 # ── ENDPOINTS PUSH TOKENS — Supabase ──
 @app.post("/push/register")
@@ -2136,6 +2077,51 @@ async def get_news(req: NewsRequest, x_app_secret: str = Header(None)):
         print(f"❌ ERREUR get_news: {str(e)}")
         return {"articles": []}
 
+def construire_prompt_actus(profile_traits, context, feedback, articles_summary) -> str:
+    """Builds the news-curation prompt. The PROFIL line appears only when the
+    app sends traits: without them, the old default ("curieux, ouvert") gave
+    everyone the same invented profile, and pushed the model towards news
+    for someone who is not the person (lot A6, 18/09/2026 — the app no longer
+    sends `profile_traits`).
+
+    @param profile_traits: Trait labels sent by the app; may be empty.
+    @param context: {metier, ville, passions?} from the request.
+    @param feedback: {liked, disliked}: article titles.
+    @param articles_summary: The numbered list of candidate articles.
+    @returns: The prompt.
+
+    ---
+
+    Bâtit le prompt de curation des actualités. La ligne PROFIL n'apparaît
+    que si l'app envoie des traits : sans eux, l'ancien défaut (« curieux,
+    ouvert ») donnait à tout le monde le même profil inventé, et poussait le
+    modèle vers des actualités pour quelqu'un qui n'est pas la personne
+    (lot A6, 18/09/2026 — l'app n'envoie plus `profile_traits`).
+
+    @param profile_traits: Libellés de traits envoyés par l'app ; peut être vide.
+    @param context: {metier, ville, passions?} de la requête.
+    @param feedback: {liked, disliked} : titres d'articles.
+    @param articles_summary: La liste numérotée des articles candidats.
+    @returns: Le prompt.
+    """
+    context = context or {}
+    feedback = feedback or {}
+    lignes_profil = [f"PROFIL : {', '.join(profile_traits)}"] if profile_traits else []
+    if context.get('metier'):   lignes_profil.append(f"Métier: {context['metier']}")
+    if context.get('ville'):    lignes_profil.append(f"Ville: {context['ville']}")
+    if context.get('passions'): lignes_profil.append(f"Passions: {', '.join(context.get('passions', []))}")
+    profil_str = '\n'.join(lignes_profil)
+    liked    = feedback.get('liked', [])
+    disliked = feedback.get('disliked', [])
+    feedback_str = f"\nHISTORIQUE :\n- Appréciés : {', '.join(liked[:5]) if liked else 'aucun'}\n- Non appréciés : {', '.join(disliked[:5]) if disliked else 'aucun'}\n" if liked or disliked else ''
+    return f"""Tu es un assistant de curation d'actualités personnalisées.
+{profil_str}{feedback_str}
+ARTICLES :
+{articles_summary}
+Sélectionne les 10 articles les plus pertinents. Retourne UNIQUEMENT ce JSON :
+{{"selected": [{{"index": 1, "why": "Explication courte"}}]}}"""
+
+
 @app.post("/news/personalized")
 async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str = Header(None), x_device_token: str = Header(None)):
     verify_secret(x_app_secret)
@@ -2162,22 +2148,7 @@ async def get_personalized_news(req: PersonalizedNewsRequest, x_app_secret: str 
         unique = deduplicate_articles(all_articles)
         if not unique: return {"articles": []}
         articles_summary = "\n".join([f"{i+1}. [{a.get('source','?')}] {a.get('title','')} — {(a.get('description','') or '')[:100]}" for i, a in enumerate(unique[:55])])
-        traits_str    = ', '.join(req.profile_traits) if req.profile_traits else 'curieux, ouvert'
-        context_lines = []
-        if req.context.get('metier'):   context_lines.append(f"Métier: {req.context['metier']}")
-        if req.context.get('ville'):    context_lines.append(f"Ville: {req.context['ville']}")
-        if req.context.get('passions'): context_lines.append(f"Passions: {', '.join(req.context.get('passions', []))}")
-        context_str = '\n'.join(context_lines)
-        liked    = req.feedback.get('liked', [])
-        disliked = req.feedback.get('disliked', [])
-        feedback_str = f"\nHISTORIQUE :\n- Appréciés : {', '.join(liked[:5]) if liked else 'aucun'}\n- Non appréciés : {', '.join(disliked[:5]) if disliked else 'aucun'}\n" if liked or disliked else ''
-        prompt = f"""Tu es un assistant de curation d'actualités personnalisées.
-PROFIL : {traits_str}
-{context_str}{feedback_str}
-ARTICLES :
-{articles_summary}
-Sélectionne les 10 articles les plus pertinents. Retourne UNIQUEMENT ce JSON :
-{{"selected": [{{"index": 1, "why": "Explication courte"}}]}}"""
+        prompt = construire_prompt_actus(req.profile_traits, req.context, req.feedback, articles_summary)
         claude_response = await call_model(
             messages=[{"role": "user", "content": prompt}], max_tokens=600,
             purpose="news_personalize", client_ref=x_device_token, timeout=20.0,
@@ -2667,8 +2638,8 @@ async def purge_identity(code: str, x_app_secret: str = Header(None)):
 
     my_code n'a pas de table dédiée en Supabase — il n'apparaît qu'en clé
     étrangère dans plusieurs tables (push_tokens, connection_requests,
-    comparisons, gifts, rc_invitations), plus device_tokens qui est en
-    SQLite local sur ce serveur (gifts.db), pas dans Supabase. On supprime
+    comparisons, rc_invitations), plus device_tokens qui est en
+    SQLite local sur ce serveur (device_tokens.db), pas dans Supabase. On supprime
     donc partout où le code peut traîner.
 
     Ne touche PAS aux copies locales de la relation stockées sur les
@@ -2684,8 +2655,8 @@ async def purge_identity(code: str, x_app_secret: str = Header(None)):
 
     my_code has no dedicated table in Supabase — it only appears as a
     foreign key across several tables (push_tokens, connection_requests,
-    comparisons, gifts, rc_invitations), plus device_tokens which lives in
-    this server's local SQLite (gifts.db), not in Supabase. So we delete
+    comparisons, rc_invitations), plus device_tokens which lives in
+    this server's local SQLite (device_tokens.db), not in Supabase. So we delete
     it everywhere it can appear.
 
     Does NOT touch the local copies of the relationship stored on peers'
@@ -2702,7 +2673,6 @@ async def purge_identity(code: str, x_app_secret: str = Header(None)):
         await sb_delete('push_tokens',        {"my_code": f"eq.{code}"})
         await sb_delete('connection_requests', {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
         await sb_delete('comparisons',         {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
-        await sb_delete('gifts',               {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
         await sb_delete('rc_invitations',      {"or": f"(from_code.eq.{code},to_code.eq.{code})"})
 
         db = get_db()
@@ -2731,7 +2701,6 @@ async def manual_cleanup(x_app_secret: str = Header(None)):
 @app.delete("/admin/reset-social")
 async def reset_social(x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
-    await sb_delete('gifts',       {"id": "neq.IMPOSSIBLE"})
     await sb_delete('comparisons', {"id": "neq.IMPOSSIBLE"})
     await sb_delete('push_tokens', {"id": "gt.0"})
     return {"success": True, "message": "Reset social OK"}
