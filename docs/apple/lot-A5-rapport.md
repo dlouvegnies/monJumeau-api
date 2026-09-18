@@ -1,6 +1,6 @@
 # Lot A5 — Textes natifs, comparaison côté app, build
 
-*18/09/2026 — dépôt app (7 commits) et dépôt API (3 commits). Harnais vert : **798 contrôles**, 24 harnais. Tests API : **112 verts**. **Rien n'est poussé, aucun build lancé, le numéro de build n'a pas bougé.***
+*18/09/2026 — dépôt app (8 commits) et dépôt API (3 commits). Harnais vert : **802 contrôles**, 24 harnais. Tests API : **112 verts**. **Rien n'est poussé, aucun build lancé, le numéro de build n'a pas bougé.***
 
 > **Aucun `eas build`, `eas submit` ni `eas update` n'a été exécuté.** Seul `npx expo prebuild` a tourné, en local, pour vérifier les Info.plist. Le build vous revient, après le lot A3 bis.
 
@@ -180,6 +180,27 @@ Vérifié en base : la ligne `E7BA15D6`, passée à `rejected`, portait encore s
 
 **Trouvé en vérifiant le ménage, et corrigé** : `cleanup_old_requests` supprimait les `rejected` **immédiatement**, sans condition d'âge. L'autre appareil pouvait donc ne jamais lire le refus. Ils partent désormais après **30 jours**, comme les autres — la ligne reste lisible, sans ses mesures. Le test du ménage affirmait l'ancienne règle ; il est réécrit pour la nouvelle, avec une refusée du jour qui **reste** et une refusée de 31 jours qui part.
 
+### D-3 — le bloc du pseudo passait sous l'encoche
+
+Il s'affiche **seul**, avant l'en-tête : il n'héritait donc d'aucune marge haute, et son titre chevauchait l'heure et les indicateurs réseau.
+
+**La « zone sûre » de ce projet est une marge fixe, pas un composant.** `paddingTop: 56` est employé à **45 endroits** ; `SafeAreaView` à **zéro** — la seule occurrence du mot est le commentaire de `screens/ParlerAUneIAScreen.js:425` qui dit que le projet n'en met pas. Le bloc porte donc la même marge que l'en-tête de cet écran-ci. En introduire un ici ferait **deux façons de tenir la même promesse** ; un contrôle vérifie qu'il n'en apparaît aucun.
+
+**Périmètre tenu** : ce bloc seul. Le reste de l'écran n'est pas touché.
+
+### D-4 — la flèche est voulue ; c'est la silhouette qui est le repli
+
+**Aucune correction, et c'est le diagnostic qui le dit.** Les deux pictogrammes sont de vraies icônes Phosphor. Rien n'est absent, rien ne se replie sur un caractère par défaut.
+
+| Archétype | Icône | D'où elle vient |
+|---|---|---|
+| contient « Explorateur » | **flèche** (`ArrowRight`) | correspondance **voulue**, `CompareResultScreen.js:24` |
+| ne contient aucun des 8 mots-clés | **silhouette** (`UserCircle`) | le **repli** |
+
+C'est donc l'inverse de ce que l'écran laissait croire : le proche avait un archétype reconnu, le lecteur non.
+
+**Ce qui est vrai en revanche, et que je signale** : la table ne connaît que **huit** mots-clés (Explorateur, Gardien, Créateur, Sage, Visionnaire, Empathique, Leader, Philosophe), alors que le modèle écrit des archétypes **libres** — « L'Architecte Ambitieux », « La Curieuse Tranquille », « Les Bâtisseurs ». Le repli tombe donc la plupart du temps, et deux archétypes différents portent souvent la même silhouette. **Au registre (S-20)** : soit on élargit la table, soit on demande au prompt de choisir parmi une liste fermée d'archétypes — la seconde option est la seule qui garantisse une icône juste.
+
 ---
 
 ## 4 bis. Écarts restants
@@ -204,8 +225,9 @@ Vérifié en base : la ligne `E7BA15D6`, passée à `rejected`, portait encore s
 | §2e Routes sans IA | 2 | — (tenues par la confrontation liste ↔ serveur, inchangée) |
 | D-1 Un seul avis par écran | 2 | — (le comptage est lui-même la preuve : 2 → 1 sur Proches) |
 | D-2 Le refus efface les mesures | 4 tests API | mesures survivant au refus · statut et vecteurs en deux ordres · ménage emportant les refus du jour |
+| D-3 La marge haute du bloc du pseudo | 4 | marge retirée · marge déclarée mais n'enveloppant rien · second mécanisme (SafeAreaView) introduit |
 
-**Vingt et une mutations jouées, chacune restaurée.** Trois leçons de parcours :
+**Vingt-quatre mutations jouées, chacune restaurée.** Trois leçons de parcours :
 
 1. Une assertion de mon premier jet de test API était **fausse, pas le code** — elle attendait un `to_vector` vide alors que la ligne d'essai en porte un.
 2. Le contrôle de langage (lot A4) a attrapé une aide inexistante que je venais d'employer dans un contrôle (`fichiers` dans `display.check.mjs`). Il sert.
@@ -222,7 +244,7 @@ Vérifié en base : la ligne `E7BA15D6`, passée à `rejected`, portait encore s
 | 1 | Installer par-dessus l'ancienne version | L'écran **« Vos données »** s'affiche — début du test de migration. | **Attend le build** |
 | 2 | Explore, toucher le micro | Les **deux fenêtres système**, chacune avec « Le texte obtenu est ensuite analysé, avec votre accord, pour alimenter votre portrait. » | **Attend le build** |
 | 3 | Comparaison avec l'iPad, accord des deux côtés | La phrase sous le bouton · le résultat dit **ton pseudo** et l'alias, **sans accolades** et **avec les verbes accordés** · le **même nom** sous l'archétype, dans la légende et dans les barres · après les deux lectures, la ligne serveur a disparu. | Passé le 18/09, **à refaire** |
-| 3 bis | Si aucun pseudo n'est enregistré | L'écran demande **une fois** « Comment veux-tu être nommé(e) dans ce texte ? », puis affiche. Il ne redemande plus ensuite. | **Nouveau** |
+| 3 bis | Si aucun pseudo n'est enregistré | L'écran demande **une fois** « Comment veux-tu être nommé(e) dans ce texte ? », puis affiche. Il ne redemande plus ensuite. **Le titre doit commencer sous l'encoche**, pas par-dessus l'heure. | Passé le 18/09, **à refaire** (marge haute) |
 | 4 | Demande reçue, **accord IA refusé** | **Un seul** avis, en haut de l'écran · « Refuser » fonctionne · en base, la ligne est `rejected` **et ses deux vecteurs sont vides**. | Passé, **à refaire** (avis et vecteurs) |
 | 5 | Tuer l'app, rouvrir le résultat | Il est toujours là, et **aucun `/compare/status`** dans les logs serveur. | Passé le 18/09 |
 
