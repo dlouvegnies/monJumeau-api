@@ -623,3 +623,21 @@ def test_refuser_n_appelle_aucune_ia(client, auth_headers, base, monkeypatch):
     base.lignes = [comparaison(status="pending")]
     client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
     assert appels == []
+
+
+# ── C-2 (lot A3 bis) : ce qui est conservé à l'acceptation ──────────────
+
+def test_accepter_ne_conserve_que_les_mesures(client, auth_headers, base):
+    """Un téléphone d'avant A3 bis envoie encore `scores` et `traits` : la
+    ligne ne garde que `vector`, donc le prompt ne reçoit chaque mesure
+    qu'une fois."""
+    base.lignes.append(comparaison(status="pending", from_accepted=0, to_accepted=0,
+                                   from_vector=None, to_vector=None,
+                                   expires_at="2999-01-01T00:00:00+00:00"))
+    r = client.post("/compare/respond", headers=auth_headers, json={
+        "comparison_id": "c1", "accepted": True, "my_code": "BBB",
+        "my_vector": {"vector": {"values.family": 0.3}, "traits": ["family"],
+                      "scores": {"values.family": 0.3}},
+    })
+    assert r.status_code == 200 and r.json()["status"] == "waiting"
+    assert json.loads(base.lignes[0]["to_vector"]) == {"vector": {"values.family": 0.3}}

@@ -21,8 +21,8 @@ import main
 def test_le_prompt_ne_contient_ni_code_ni_prenom():
     """Le prompt est bâti sur les deux vecteurs, rien d'autre : ni from_code,
     ni to_code, ni quoi que ce soit qui identifie quelqu'un."""
-    from_vector = {"vector": {"values.family": 0.8}, "traits": ["famille"], "scores": {}}
-    to_vector = {"vector": {"values.family": 0.3}, "traits": ["autonomie"], "scores": {}}
+    from_vector = {"vector": {"values.family": 0.8}}
+    to_vector = {"vector": {"values.family": 0.3}}
     prompt = main.construire_prompt_comparaison(from_vector, to_vector)
     for identifiant in ("PD-NHQ6-LPGS", "AB-CDEF-GHIJ", "Denis", "Hector"):
         assert identifiant not in prompt
@@ -250,3 +250,36 @@ def test_le_prompt_respecte_sa_propre_regle():
     fautes = main.fautes_de_marqueurs(
         json.dumps({"message_poetique": "\n".join(exemple)}, ensure_ascii=False))
     assert fautes == [], f"le prompt s'enfreint lui-même : {fautes}"
+
+
+# ── C-2 (lot A3 bis) : chaque mesure part une fois ──────────────────────
+
+def test_ne_garde_que_les_mesures():
+    """`scores` (copie de `vector`) et `traits` (recalculés) ne sont pas
+    conservés : les builds déjà installés les envoient encore."""
+    ancien = {"vector": {"values.family": 0.8, "energy.morning_person": 0.65},
+              "traits": ["morning_person"],
+              "scores": {"values.family": 0.8, "energy.morning_person": 0.65}}
+    assert main.vecteur_a_conserver(ancien) == {
+        "vector": {"values.family": 0.8, "energy.morning_person": 0.65}}
+
+
+def test_un_envoi_v1_sans_vector_garde_ses_mesures():
+    assert main.vecteur_a_conserver({"scores": {"values.family": 0.8}, "traits": ["x"]}) == {
+        "vector": {"values.family": 0.8}}
+
+
+def test_un_envoi_vide_ou_invalide_ne_casse_rien():
+    assert main.vecteur_a_conserver(None) == {"vector": {}}
+    assert main.vecteur_a_conserver({"vector": "pas un dict"}) == {"vector": {}}
+
+
+def test_chaque_mesure_apparait_une_fois_par_profil_dans_le_prompt():
+    """Avant : `vector` et `scores` identiques, sérialisés ensemble — chaque
+    mesure figurait deux fois par profil."""
+    ancien = {"vector": {"values.family": 0.8}, "traits": ["family"],
+              "scores": {"values.family": 0.8}}
+    prompt = main.construire_prompt_comparaison(
+        main.vecteur_a_conserver(ancien), main.vecteur_a_conserver(ancien))
+    assert prompt.count("values.family") == 2          # A et B, une fois chacun
+    assert '"scores"' not in prompt and '"traits"' not in prompt

@@ -1150,6 +1150,40 @@ async def request_comparison(req: CompareRequestModel, x_app_secret: str = Heade
         )
     return {"success": True, "comparison_id": comparison_id}
 
+def vecteur_a_conserver(my_vector) -> dict:
+    """Keeps, of what a phone sends for a comparison, the measures only:
+    `{"vector": {...}}`. Lot A3 bis (C-2): the app used to send `scores`, an
+    exact copy of `vector`, and `traits`, recomputed from `vector` and
+    stripped of its key family. This object is serialised whole into the
+    prompt, so every measure reached Anthropic twice. The app no longer
+    sends them; builds already installed still do, hence this server side
+    rule. An old V1 payload with `scores` only keeps its measures.
+
+    @param my_vector: The `my_vector` received, or None.
+    @returns: `{"vector": dict}` — never `scores`, never `traits`.
+
+    ---
+
+    Garde, de ce qu'un téléphone envoie pour une comparaison, les seules
+    mesures : `{"vector": {...}}`. Lot A3 bis (C-2) : l'app envoyait
+    `scores`, copie exacte de `vector`, et `traits`, recalculés depuis
+    `vector` et privés de leur famille de clé. L'objet est sérialisé entier
+    dans le prompt : chaque mesure partait deux fois chez Anthropic. L'app ne
+    les envoie plus ; les builds déjà installés, si — d'où cette règle côté
+    serveur. Un ancien envoi V1 qui ne porterait que `scores` garde ses
+    mesures.
+
+    @param my_vector: Le `my_vector` reçu, ou None.
+    @returns: `{"vector": dict}` — jamais `scores`, jamais `traits`.
+    """
+    if not isinstance(my_vector, dict):
+        return {"vector": {}}
+    mesures = my_vector.get("vector")
+    if not isinstance(mesures, dict):
+        mesures = my_vector.get("scores") if isinstance(my_vector.get("scores"), dict) else {}
+    return {"vector": dict(mesures)}
+
+
 @app.post("/compare/respond")
 async def respond_comparison(req: CompareRespondModel, x_app_secret: str = Header(None)):
     verify_secret(x_app_secret)
@@ -1166,10 +1200,10 @@ async def respond_comparison(req: CompareRespondModel, x_app_secret: str = Heade
     is_from = comparison['from_code'] == req.my_code
     if is_from:
         await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"},
-            {"from_accepted": 1, "from_vector": json.dumps(req.my_vector)})
+            {"from_accepted": 1, "from_vector": json.dumps(vecteur_a_conserver(req.my_vector))})
     else:
         await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"},
-            {"to_accepted": 1, "to_vector": json.dumps(req.my_vector)})
+            {"to_accepted": 1, "to_vector": json.dumps(vecteur_a_conserver(req.my_vector))})
     updated = await sb_get_one('comparisons', {"id": f"eq.{req.comparison_id}"})
     if updated and updated.get('from_accepted') and updated.get('to_accepted'):
         await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"}, {"status": "analyzing"})
