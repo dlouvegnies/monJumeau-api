@@ -462,6 +462,24 @@ class RegisterPushRequest(BaseModel):
     my_code: str
     push_token: str
 
+class CompareDeclineRequest(BaseModel):
+    """Un téléphone refuse une demande de comparaison reçue.
+
+    Sans vecteur : refuser n'envoie rien du portrait. C'est toute la raison
+    d'être de cette route — /compare/respond porte les mesures, donc l'app la
+    garde derrière l'accord IA, et refuser devenait impossible sans lui
+    (écart S-11 du registre, 17/09).
+    ---
+    One phone declines a comparison request it received.
+
+    No vector: declining sends nothing of the portrait. That is the whole
+    point of this route — /compare/respond carries the measurements, so the
+    app keeps it behind the AI agreement, and declining had become impossible
+    without it (registry gap S-11, 17/09)."""
+    comparison_id: str
+    my_code: str
+
+
 class CompareAckRequest(BaseModel):
     """Un téléphone déclare avoir pris le résultat d'une comparaison.
     ---
@@ -1578,6 +1596,49 @@ async def _analyser_comparaison(comparison_id: str, comparison: dict):
         # échec — statut, vecteurs effacés, et les deux téléphones prévenus.
         await _clore_comparaison_en_echec(comparison_id, comparison,
                                           "aucune analyse exploitable après relance")
+
+
+@app.post("/compare/decline")
+async def decline_comparison(req: CompareDeclineRequest, x_app_secret: str = Header(None)):
+    """Declines a received comparison request, without sending anything.
+
+    Idempotent, like the acknowledgement: declining twice changes nothing,
+    and declining an already-gone row answers success. A phone must never be
+    stuck retrying a refusal.
+
+    No AI is called, and no measurement leaves the phone: that is why the app
+    may call it whatever the person answered about AI analysis.
+
+    @param req: comparison_id and my_code.
+    @returns: success and the resulting status.
+
+    ---
+
+    Refuse une demande de comparaison reçue, sans rien envoyer.
+
+    Idempotente, comme l'accusé de réception : refuser deux fois ne change
+    rien, et refuser une ligne déjà partie répond succès. Un téléphone ne doit
+    jamais rester coincé à réessayer un refus.
+
+    Aucune IA n'est appelée, et aucune mesure ne quitte le téléphone : c'est
+    pourquoi l'app peut l'appeler quelle que soit la réponse de la personne
+    sur l'analyse par une IA.
+
+    @param req: comparison_id et my_code.
+    @returns: succès et le statut obtenu.
+    """
+    verify_secret(x_app_secret)
+    comparison = await sb_get_one('comparisons', {"id": f"eq.{req.comparison_id}", "select": "*"})
+    if not comparison:
+        # Déjà partie : refuser ce qui n'existe plus n'est pas une erreur.
+        return {"success": True, "status": "rejected"}
+
+    if req.my_code not in (comparison.get('from_code'), comparison.get('to_code')):
+        raise HTTPException(status_code=403, detail="Cette comparaison n'est pas la vôtre.")
+
+    if comparison.get('status') != 'rejected':
+        await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"}, {"status": "rejected"})
+    return {"success": True, "status": "rejected"}
 
 
 @app.post("/compare/ack")

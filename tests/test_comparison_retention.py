@@ -522,3 +522,65 @@ async def test_le_compteur_suit_les_analyses_conservees_avec_fautes(base, monkey
     base.lignes = [comparaison()]
     await main.analyze_comparison("c1")
     assert main.COMPTEUR_COMPARAISONS == {"total": 2, "conservees_avec_fautes": 1}
+
+
+# ── /compare/decline : refuser sans rien envoyer (écart S-11) ─────────────
+def test_refuser_passe_la_ligne_en_rejete(client, auth_headers, base):
+    """Refuser n'envoie AUCUNE mesure : c'est toute la raison d'être de cette
+    route. /compare/respond porte les vecteurs, donc l'app la garde derrière
+    l'accord IA — et refuser devenait impossible sans lui."""
+    base.lignes = [comparaison(status="pending")]
+    r = client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json() == {"success": True, "status": "rejected"}
+    assert base.lignes[0]["status"] == "rejected"
+
+
+def test_refuser_ne_touche_a_aucun_vecteur(client, auth_headers, base):
+    """Ni lecture, ni écriture de vecteur : la route ne connaît que le statut.
+
+    On compare aux valeurs de DÉPART, quelles qu'elles soient : la ligne
+    d'essai en porte déjà, et c'est précisément ce qu'on veut voir intact."""
+    base.lignes = [comparaison(status="pending")]
+    avant = (base.lignes[0]["from_vector"], base.lignes[0]["to_vector"])
+    client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    apres = (base.lignes[0]["from_vector"], base.lignes[0]["to_vector"])
+    assert apres == avant
+
+
+def test_refuser_est_idempotent(client, auth_headers, base):
+    base.lignes = [comparaison(status="pending")]
+    client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    r = client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    assert r.json()["status"] == "rejected" and base.lignes[0]["status"] == "rejected"
+    base.lignes = []
+    r = client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
+
+
+def test_refuser_pour_autrui_est_interdit(client, auth_headers, base):
+    base.lignes = [comparaison(status="pending")]
+    r = client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "ZZZ"}, headers=auth_headers)
+    assert r.status_code == 403
+
+
+def test_l_initiateur_peut_aussi_annuler(client, auth_headers, base):
+    """Celui qui a demandé peut se raviser : la route accepte les deux côtés."""
+    base.lignes = [comparaison(status="pending")]
+    r = client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "AAA"}, headers=auth_headers)
+    assert r.status_code == 200 and base.lignes[0]["status"] == "rejected"
+
+
+def test_refuser_n_appelle_aucune_ia(client, auth_headers, base, monkeypatch):
+    """Aucune IA, donc aucune raison d'être derrière l'accord — c'est ce qui
+    rend le refus possible sans lui."""
+    appels = []
+
+    async def modele(**kwargs):
+        appels.append(kwargs)
+        raise AssertionError("aucun appel de modèle ne doit partir d'un refus")
+
+    monkeypatch.setattr(main, "call_model", modele)
+    base.lignes = [comparaison(status="pending")]
+    client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    assert appels == []
