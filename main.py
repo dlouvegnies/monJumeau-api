@@ -727,13 +727,21 @@ async def cleanup_old_requests():
             # ── Comparaisons (décision L) ──
             # Une comparaison porte les vecteurs de DEUX personnes : rien ici
             # ne doit vivre plus longtemps que nécessaire.
-            #   refusée    → plus rien à en faire ;
+            #   refusée    → après 30 jours. Pas tout de suite : l'autre
+            #     appareil doit pouvoir LIRE « rejected » pour dire
+            #     « Demande refusée » au lieu de laisser croire à une
+            #     expiration. Les mesures, elles, sont déjà parties — la
+            #     route de refus les efface dans le même ordre que le
+            #     statut (18/09) ;
             #   en attente et expirée → y compris le vecteur de celui qui
             #     avait accepté, et qui n'aura jamais de réponse ;
             #   terminée ou en cours d'analyse depuis plus de 30 jours → le
             #     filet, pour le téléphone qui ne revient jamais chercher son
             #     résultat.
-            await sb_delete('comparisons', {"status": "eq.rejected"})
+            await sb_delete('comparisons', {
+                "status": "eq.rejected",
+                "created_at": f"lt.{iso_days_ago(COMPARISON_KEEP_DAYS)}",
+            })
             await sb_delete('comparisons', {"status": "eq.pending", "expires_at": f"lt.{iso_now()}"})
             for statut in ("completed", "analyzing", "failed"):
                 await sb_delete('comparisons', {
@@ -1636,8 +1644,23 @@ async def decline_comparison(req: CompareDeclineRequest, x_app_secret: str = Hea
     if req.my_code not in (comparison.get('from_code'), comparison.get('to_code')):
         raise HTTPException(status_code=403, detail="Cette comparaison n'est pas la vôtre.")
 
-    if comparison.get('status') != 'rejected':
-        await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"}, {"status": "rejected"})
+    # UN SEUL ordre : le statut ET les deux vecteurs, ensemble. En deux
+    # ordres, une panne entre les deux laisserait une ligne « rejected » qui
+    # porte encore les mesures — c'est exactement le défaut relevé le 18/09
+    # sur la ligne E7BA15D6, dont `from_vector` survivait au refus.
+    #
+    # La ligne n'est PAS supprimée : l'autre appareil doit pouvoir lire
+    # « rejected » pour dire « Demande refusée » plutôt que de laisser croire
+    # à une expiration. Elle part au ménage des 30 jours, sans ses mesures.
+    #
+    # Pas d'accusé de réception sur un refus : il n'y a pas de résultat à
+    # transmettre, et en attendre un obligerait à garder les vecteurs plus
+    # longtemps, pour rien.
+    await sb_patch('comparisons', {"id": f"eq.{req.comparison_id}"}, {
+        "status": "rejected",
+        "from_vector": None,
+        "to_vector": None,
+    })
     return {"success": True, "status": "rejected"}
 
 

@@ -179,10 +179,17 @@ def test_ack_d_un_tiers_est_refusee(client, auth_headers, base):
 # ── Le nettoyage quotidien ───────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_le_nettoyage_balaie_les_comparaisons(base, monkeypatch):
-    """Refusée, en attente expirée, et vieille de plus de 30 jours."""
+    """En attente expirée, vieille de plus de 30 jours, et refusée de plus de
+    30 jours.
+
+    Lot A5 (18/09) : une refusée du jour RESTE. L'autre appareil doit pouvoir
+    lire « rejected » pour dire « Demande refusée » au lieu de laisser croire
+    à une expiration. Ses mesures, elles, sont déjà parties — la route de
+    refus les efface dans le même ordre que le statut."""
     vieux = main.iso_days_ago(31)
     base.lignes = [
-        comparaison(id="refusee", status="rejected"),
+        comparaison(id="refusee_ancienne", status="rejected", created_at=vieux),
+        comparaison(id="refusee_du_jour", status="rejected"),
         comparaison(id="expiree", status="pending", expires_at="2020-01-01T00:00:00+00:00"),
         comparaison(id="vieille", status="completed", created_at=vieux),
         comparaison(id="recente", status="completed"),
@@ -197,7 +204,7 @@ async def test_le_nettoyage_balaie_les_comparaisons(base, monkeypatch):
     with pytest.raises(RuntimeError):
         await main.cleanup_old_requests()
     restants = {l["id"] for l in base.lignes}
-    assert restants == {"recente"}, restants
+    assert restants == {"recente", "refusee_du_jour"}, restants
 
 
 @pytest.mark.asyncio
@@ -536,16 +543,48 @@ def test_refuser_passe_la_ligne_en_rejete(client, auth_headers, base):
     assert base.lignes[0]["status"] == "rejected"
 
 
-def test_refuser_ne_touche_a_aucun_vecteur(client, auth_headers, base):
-    """Ni lecture, ni écriture de vecteur : la route ne connaît que le statut.
-
-    On compare aux valeurs de DÉPART, quelles qu'elles soient : la ligne
-    d'essai en porte déjà, et c'est précisément ce qu'on veut voir intact."""
+def test_refuser_efface_les_deux_vecteurs(client, auth_headers, base):
+    """Défaut relevé sur appareil le 18/09 : la ligne E7BA15D6, passée à
+    « rejected », portait encore son `from_vector`. Les mesures d'un portrait
+    dormaient sur le serveur alors que l'autre personne avait dit non."""
     base.lignes = [comparaison(status="pending")]
-    avant = (base.lignes[0]["from_vector"], base.lignes[0]["to_vector"])
+    assert base.lignes[0]["from_vector"] is not None  # le contrôle ne passe pas à vide
     client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
-    apres = (base.lignes[0]["from_vector"], base.lignes[0]["to_vector"])
-    assert apres == avant
+    assert base.lignes[0]["status"] == "rejected"
+    assert base.lignes[0]["from_vector"] is None
+    assert base.lignes[0]["to_vector"] is None
+
+
+def test_refuser_ecrit_le_statut_et_les_vecteurs_ensemble(client, auth_headers, base):
+    """Un SEUL ordre. En deux, une panne entre les deux laisserait une ligne
+    refusée qui porte encore les mesures — le défaut qu'on corrige."""
+    ordres = []
+    vrai_patch = main.sb_patch
+
+    async def patch_espion(table, filtres, valeurs):
+        ordres.append((table, dict(valeurs)))
+        return await vrai_patch(table, filtres, valeurs)
+
+    main.sb_patch = patch_espion
+    try:
+        base.lignes = [comparaison(status="pending")]
+        client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    finally:
+        main.sb_patch = vrai_patch
+    ecritures = [o for o in ordres if o[0] == "comparisons"]
+    assert len(ecritures) == 1, ecritures
+    assert ecritures[0][1] == {"status": "rejected", "from_vector": None, "to_vector": None}
+
+
+def test_le_statut_reste_lisible_apres_le_refus(client, auth_headers, base):
+    """La ligne n'est pas supprimée : l'autre appareil doit pouvoir lire
+    « rejected » pour dire « Demande refusée » plutôt que de laisser croire à
+    une expiration."""
+    base.lignes = [comparaison(status="pending")]
+    client.post("/compare/decline", json={"comparison_id": "c1", "my_code": "BBB"}, headers=auth_headers)
+    assert len(base.lignes) == 1
+    r = client.get("/compare/status/c1", headers=auth_headers)
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
 
 
 def test_refuser_est_idempotent(client, auth_headers, base):
